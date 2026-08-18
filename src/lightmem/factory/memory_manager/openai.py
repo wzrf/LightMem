@@ -130,6 +130,11 @@ class OpenaiManager:
             params["tools"] = tools
             params["tool_choice"] = tool_choice
 
+        ##mengyao_debug
+        params["extra_body"] = {
+            "enable_thinking": False
+        }
+
         response = self.client.chat.completions.create(**params)
         usage_info = {
             "prompt_tokens": response.usage.prompt_tokens,

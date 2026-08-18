@@ -22,21 +22,17 @@ RUN_LOG_DIR = os.path.join(LOGS_ROOT, RUN_TIMESTAMP)
 os.makedirs(RUN_LOG_DIR, exist_ok=True)
 
 API_KEYS = [
-    'your-api-key-1',
-    'your-api-key-2',
-    'your-api-key-3',
-    'your-api-key-4',
-    'your-api-key-5',
+    'sk-dummy'
 ]
-API_BASE_URL = ''
-LLM_MODEL = 'gpt-4o-mini'
+API_BASE_URL = 'http://127.0.0.1:30004/v1'
+LLM_MODEL = 'qwen3-8b'
 
 # Model Paths
-LLMLINGUA_MODEL_PATH = '/path/to/llmlingua-model'
-EMBEDDING_MODEL_PATH = '/path/to/embedding-model'
+LLMLINGUA_MODEL_PATH='/mnt/qjhs-sh-lab-01/models/llmlingua-2-bert-base-multilingual-cased-meetingbank'
+EMBEDDING_MODEL_PATH='/mnt/qjhs-sh-lab-01/models/all-MiniLM-L6-v2'
 
 # Data Configuration
-DATA_PATH = '/path/to/locomo10.json'
+DATA_PATH = 'data/locomo10.json'
 DATASET_TYPE = 'locomo'
 
 # Qdrant Storage Directories
@@ -47,7 +43,7 @@ os.makedirs(QDRANT_PRE_UPDATE_DIR, exist_ok=True)
 os.makedirs(QDRANT_POST_UPDATE_DIR, exist_ok=True)
 
 # Parallel Processing Configuration
-MAX_WORKERS = 5
+MAX_WORKERS = 16
 USE_PROCESS_POOL = True
 
 # ============ Arguments ============
@@ -185,7 +181,7 @@ def load_lightmem(collection_name, api_key, args, base_dir=QDRANT_POST_UPDATE_DI
             "configs": {
                 "model": LLM_MODEL,
                 "api_key": api_key,
-                "max_tokens": 16000,
+                "max_tokens": 8192,
                 "openai_base_url": API_BASE_URL
             },
         },

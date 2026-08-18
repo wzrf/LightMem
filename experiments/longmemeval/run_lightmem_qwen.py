@@ -7,19 +7,20 @@ import os
 from lightmem.memory.lightmem import LightMemory
 
 # ============ API Configuration ============
-JUDGE_MODEL_API_KEY='sk-xxxxxxxxxxxxxxxxxxxxxxxxxx'
-JUDGE_MODEL_BASE_URL='https://api.deepseek.com/v1'
-JUDGE_MODEL='deepseek-chat'
-API_KEY='sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
-API_BASE_URL='https://dashscope.aliyuncs.com/compatible-mode/v1'
-LLM_MODEL='qwen-plus'
+JUDGE_MODEL_API_KEY='sk-11ce7640e46049a6977c0d96ba855ffb'
+JUDGE_MODEL_BASE_URL='https://dashscope.aliyuncs.com/compatible-mode/v1'
+JUDGE_MODEL='deepseek-v3.2'
+
+API_KEY='sk-dummy'
+API_BASE_URL='http://127.0.0.1:30004/v1'
+LLM_MODEL='qwen3-8b'
 
 # ============ Model Paths ============
-LLMLINGUA_MODEL_PATH='/your/path/to/models/llmlingua-2-bert-base-multilingual-cased-meetingbank'
-EMBEDDING_MODEL_PATH='/your/path/to/models/all-MiniLM-L6-v2'
+LLMLINGUA_MODEL_PATH='/mnt/qjhs-sh-lab-01/models/llmlingua-2-bert-base-multilingual-cased-meetingbank'
+EMBEDDING_MODEL_PATH='/mnt/qjhs-sh-lab-01/models/all-MiniLM-L6-v2'
 
 # ============ Data Configuration ============
-DATA_PATH='/your/path/to/dataset/longmemeval/longmemeval_s.json'
+DATA_PATH='../../data/longmemeval_mixed.json'
 RESULTS_DIR='../results'
 QDRANT_DATA_DIR='./qdrant_data'
 
@@ -155,7 +156,7 @@ llm_judge = LLMModel(JUDGE_MODEL, JUDGE_MODEL_API_KEY, JUDGE_MODEL_BASE_URL)
 llm = LLMModel(LLM_MODEL, API_KEY, API_BASE_URL)
 
 data = json.load(open(DATA_PATH, "r"))
-data = data[:10]
+# data = data[:10]
 
 INIT_RESULT = {
     "add_input_prompt": [],
@@ -199,9 +200,11 @@ for item in tqdm(data):
     related_memories = lightmem.retrieve(item["question"], limit=20)
     messages = []
     messages.append({"role": "system", "content": "You are a helpful assistant."})
+
+    memory_text = "\n".join(related_memories)
     messages.append({
         "role": "user",
-        "content": f"Question time:{item['question_date']} and question:{item['question']}\nPlease answer the question based on the following memories: {'\n'.join(related_memories)}"
+        "content": f"Question time:{item['question_date']} and question:{item['question']}\nPlease answer the question based on the following memories: {memory_text}"
     })
     generated_answer = llm.call(messages)
 
