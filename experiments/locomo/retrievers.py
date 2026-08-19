@@ -8,7 +8,7 @@ from typing import List, Dict, Any, Set, Optional, Tuple
 from collections import defaultdict, deque
 from datetime import datetime
 import numpy as np
-import spacy
+# import spacy
 from lightmem.factory.retriever.embeddingretriever.qdrant import Qdrant
 from lightmem.configs.retriever.embeddingretriever.qdrant import QdrantConfig
 

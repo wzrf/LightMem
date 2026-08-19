@@ -61,6 +61,8 @@ class Qdrant:
         self.embedding_model_dims = config.embedding_model_dims
         self.on_disk = config.on_disk
         self.create_col(config.embedding_model_dims, config.on_disk)
+        all = self.get_all()
+        print(f"qdrant collection: {self.collection_name} current={len(all)}")
 
     def create_col(self, vector_size: int, on_disk: bool, distance: Distance = Distance.COSINE):
         """

@@ -4,25 +4,24 @@ from tqdm import tqdm
 import datetime
 import time
 import os
+import sys
+from multiprocessing import Pool
 from lightmem.memory.lightmem import LightMemory
+import shutil
 
 # ============ API Configuration ============
-JUDGE_MODEL_API_KEY='sk-11ce7640e46049a6977c0d96ba855ffb'
-JUDGE_MODEL_BASE_URL='https://dashscope.aliyuncs.com/compatible-mode/v1'
-JUDGE_MODEL='deepseek-v3.2'
+JUDGE_MODEL_API_KEY = 'sk-11ce7640e46049a6977c0d96ba855ffb'
+JUDGE_MODEL_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
+JUDGE_MODEL = 'deepseek-v3.2'
 
-API_KEY='sk-dummy'
-API_BASE_URL='http://127.0.0.1:30004/v1'
-LLM_MODEL='qwen3-8b'
+API_KEY = 'sk-dummy'
+API_BASE_URL = 'http://127.0.0.1:30004/v1'
+LLM_MODEL = 'qwen3-8b'
 
 # ============ Model Paths ============
-LLMLINGUA_MODEL_PATH='/mnt/qjhs-sh-lab-01/models/llmlingua-2-bert-base-multilingual-cased-meetingbank'
-EMBEDDING_MODEL_PATH='/mnt/qjhs-sh-lab-01/models/all-MiniLM-L6-v2'
+LLMLINGUA_MODEL_PATH = '/mnt/qjhs-sh-lab-01/models/llmlingua-2-bert-base-multilingual-cased-meetingbank'
+EMBEDDING_MODEL_PATH = '/mnt/qjhs-sh-lab-01/models/all-MiniLM-L6-v2'
 
-# ============ Data Configuration ============
-DATA_PATH='../../data/longmemeval_mixed.json'
-RESULTS_DIR='../results'
-QDRANT_DATA_DIR='./qdrant_data'
 
 def get_anscheck_prompt(task, question, answer, response, abstention=False):
     if not abstention:
@@ -42,8 +41,9 @@ def get_anscheck_prompt(task, question, answer, response, abstention=False):
             raise NotImplementedError
     else:
         template = "I will give you an unanswerable question, an explanation, and a response from a model. Please answer yes if the model correctly identifies the question as unanswerable. The model could say that the information is incomplete, or some other information is given but the asked information is not.\n\nQuestion: {}\n\nExplanation: {}\n\nModel Response: {}\n\nDoes the model correctly identify the question as unanswerable? Answer yes or no only."
-        prompt = template.format(question, answer, response) 
+        prompt = template.format(question, answer, response)
     return prompt
+
 
 def true_or_false(response):
     if response is None:
@@ -79,7 +79,7 @@ class LLMModel:
 
     def call(self, messages: list, **kwargs):
         max_retries = kwargs.get("max_retries", 3)
-    
+
         for attempt in range(max_retries):
             try:
                 completion = self.client.chat.completions.create(
@@ -97,6 +97,7 @@ class LLMModel:
                 print(f"[Retry {attempt + 1}/{max_retries}]  {type(e).__name__}: {e}")
                 if attempt == max_retries - 1:
                     raise
+
 
 def load_lightmem(collection_name):
     config = {
@@ -145,6 +146,7 @@ def load_lightmem(collection_name):
                 "collection_name": collection_name,
                 "embedding_model_dims": 384,
                 "path": f'{QDRANT_DATA_DIR}/{collection_name}',
+                "on_disk": True,
             }
         },
         "update": "offline",
@@ -152,11 +154,6 @@ def load_lightmem(collection_name):
     lightmem = LightMemory.from_config(config)
     return lightmem
 
-llm_judge = LLMModel(JUDGE_MODEL, JUDGE_MODEL_API_KEY, JUDGE_MODEL_BASE_URL)
-llm = LLMModel(LLM_MODEL, API_KEY, API_BASE_URL)
-
-data = json.load(open(DATA_PATH, "r"))
-# data = data[:10]
 
 INIT_RESULT = {
     "add_input_prompt": [],
@@ -164,38 +161,64 @@ INIT_RESULT = {
     "api_call_nums": 0
 }
 
-for item in tqdm(data):
-    print(item["question_id"])
-    lightmem = load_lightmem(collection_name=item["question_id"])
-    sessions = item["haystack_sessions"]
-    timestamps = item["haystack_dates"]
+
+def process_item(item):
+    llm_judge = LLMModel(JUDGE_MODEL, JUDGE_MODEL_API_KEY, JUDGE_MODEL_BASE_URL)
+    llm = LLMModel(LLM_MODEL, API_KEY, API_BASE_URL)
+    qid = item["question_id"]
+    print(qid)
+
+    # 定义 Qdrant 缓存路径与完成标志文件路径
+    qdrant_path = os.path.join(QDRANT_DATA_DIR, qid)
+    flag_file = os.path.join(qdrant_path, "build_complete.flag")
 
     results_list = []
+    construction_time = 0.0
 
-    time_start = time.time()
-    for session, timestamp in zip(sessions, timestamps):
-        while session and session[0]["role"] != "user":
-            session.pop(0)
-        num_turns = len(session) // 2  
-        for turn_idx in range(num_turns):
-            turn_messages = session[turn_idx*2 : turn_idx*2 + 2]
-            if len(turn_messages) < 2 or turn_messages[0]["role"] != "user" or turn_messages[1]["role"] != "assistant":
-                continue
-            for msg in turn_messages:
-                msg["time_stamp"] = timestamp
-            is_last_turn = (
-                session is sessions[-1] and turn_idx == num_turns - 1
-            )
-            result = lightmem.add_memory(
-                messages=turn_messages,
-                force_segment=is_last_turn,
-                force_extract=is_last_turn,
-            )
-            if result != INIT_RESULT:
-                results_list.append(result)
+    # 判断是否已经 Build 完成
+    if os.path.exists(flag_file):
+        print(f"question {qid} build complete flag found, skipping build.")
+        lightmem = load_lightmem(collection_name=qid)
+    else:
+        # 如果未完成 Build，清理可能存在的未完成历史缓存
+        if os.path.exists(qdrant_path):
+            print(f"question {qid} incomplete build found, clearing cache...")
+            shutil.rmtree(qdrant_path)
 
-    time_end = time.time()
-    construction_time = time_end - time_start
+        lightmem = load_lightmem(collection_name=qid)
+        sessions = item["haystack_sessions"]
+        timestamps = item["haystack_dates"]
+
+        time_start = time.time()
+        for session_idx, (session, timestamp) in enumerate(zip(sessions, timestamps)):
+            while session and session[0]["role"] != "user":
+                session.pop(0)
+            num_turns = len(session) // 2
+            for turn_idx in range(num_turns):
+                print(f"question {qid} running session {session_idx}/{len(sessions)}")
+                turn_messages = session[turn_idx * 2: turn_idx * 2 + 2]
+                if len(turn_messages) < 2 or turn_messages[0]["role"] != "user" or turn_messages[1]["role"] != "assistant":
+                    continue
+                for msg in turn_messages:
+                    msg["time_stamp"] = timestamp
+                is_last_turn = (
+                        session is sessions[-1] and turn_idx == num_turns - 1
+                )
+                result = lightmem.add_memory(
+                    messages=turn_messages,
+                    force_segment=is_last_turn,
+                    force_extract=is_last_turn,
+                )
+                if result != INIT_RESULT:
+                    results_list.append(result)
+
+        time_end = time.time()
+        construction_time = time_end - time_start
+
+        # 构建完成，生成本地标志文件
+        os.makedirs(qdrant_path, exist_ok=True)
+        with open(flag_file, "w", encoding="utf-8") as f:
+            f.write("build_complete")
 
     related_memories = lightmem.retrieve(item["question"], limit=20)
     messages = []
@@ -221,8 +244,11 @@ for item in tqdm(data):
 
     correct = 1 if true_or_false(response) else 0
 
+    print(f"question={item['question']}, golden answer={item['answer']}, system answer={generated_answer}")
+
     save_data = {
         "question_id": item["question_id"],
+        "related_memories": related_memories,
         "results": results_list,
         "construction_time": construction_time,
         "generated_answer": generated_answer,
@@ -234,3 +260,25 @@ for item in tqdm(data):
     os.makedirs(os.path.dirname(filename), exist_ok=True)
     with open(filename, "w", encoding="utf-8") as f:
         json.dump(save_data, f, ensure_ascii=False, indent=4)
+
+
+def main():
+    data = json.load(open(DATA_PATH, "r"))
+
+    try:
+        with Pool(processes=MAX_WORKERS) as pool:
+            # chunksize=1 保证任务逐个派发，tqdm 可以准确显示进度
+            for _ in tqdm(pool.imap_unordered(process_item, data), total=len(data)):
+                pass
+    except KeyboardInterrupt:
+        print("\n[Ctrl+C] 收到中断信号，正在终止所有子进程...")
+        pool.terminate()  # 立即强行杀掉所有子进程
+        pool.join()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    MAX_WORKERS = 32
+    RESULTS_DIR = '../results' ## mengyao_debug 测试结果
+    QDRANT_DATA_DIR = './qdrant_data' ## 数据
+    DATA_PATH = '../../data/longmemeval_mixed.json'
+    main()
