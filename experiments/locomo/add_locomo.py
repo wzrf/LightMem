@@ -32,7 +32,7 @@ LLMLINGUA_MODEL_PATH='/mnt/qjhs-sh-lab-01/models/llmlingua-2-bert-base-multiling
 EMBEDDING_MODEL_PATH='/mnt/qjhs-sh-lab-01/models/all-MiniLM-L6-v2'
 
 # Data Configuration
-DATA_PATH = 'data/locomo10.json'
+DATA_PATH = '../../data/locomo10.json'
 DATASET_TYPE = 'locomo'
 
 # Qdrant Storage Directories
@@ -43,7 +43,6 @@ os.makedirs(QDRANT_PRE_UPDATE_DIR, exist_ok=True)
 os.makedirs(QDRANT_POST_UPDATE_DIR, exist_ok=True)
 
 # Parallel Processing Configuration
-MAX_WORKERS = 16
 USE_PROCESS_POOL = True
 
 # ============ Arguments ============
@@ -279,7 +278,7 @@ def collection_entry_count(collection_name, base_dir):
 
 # ============ Core Processing Function ============
 
-def process_single_sample(sample, api_key, args):
+def process_single_sample(sample, api_key, args, TOKEN_CONSUMPTION):
     sample_id = sample['sample_id']
     logger = get_process_logger(sample_id)
     if args.extraction_mode == "event":
@@ -331,7 +330,10 @@ def process_single_sample(sample, api_key, args):
                     force_segment=is_last_turn,
                     force_extract=is_last_turn,
                 )
-        
+
+            # llm_stats_tmp = lightmem.get_token_statistics()
+            # print(llm_stats_tmp)
+
         add_memory_end_time = time.time()
         add_memory_duration = add_memory_end_time - add_memory_start_time
         
@@ -457,6 +459,8 @@ def process_single_sample(sample, api_key, args):
         case_total_duration = case_end_time - case_start_time
         
         # Log summary statistics
+        with open(f"{TOKEN_CONSUMPTION}/{sample['sample_id']}.json", "w", encoding="utf-8") as f:
+            json.dump(update_end_stats, f, ensure_ascii=False, indent=4)
         logger.info(f"\n{'='*70}")
         logger.info(f"SUMMARY: {sample_id}")
         logger.info(f"{'='*70}")
@@ -531,8 +535,6 @@ def process_single_sample(sample, api_key, args):
 
 def main():
     args = parse_args()
-    global MAX_WORKERS
-    MAX_WORKERS = args.workers
     main_logger = logging.getLogger("lightmem.parallel.main")
     main_logger.setLevel(logging.INFO)
     
@@ -631,7 +633,7 @@ def main():
             api_key_idx = idx % len(API_KEYS)
             api_key = API_KEYS[api_key_idx]
             
-            future = executor.submit(process_single_sample, sample, api_key, args)
+            future = executor.submit(process_single_sample, sample, api_key, args, TOKEN_CONSUMPTION)
             future_to_sample[future] = sample
         
         # Process results as they complete
@@ -695,5 +697,10 @@ def main():
 
 
 if __name__ == "__main__":
+    MAX_WORKERS = 16
+    if os.environ.get('DEBUG') == "1":
+        MAX_WORKERS = 1
+    TOKEN_CONSUMPTION = "../token_consumption_build_memory_locomo/"
+    os.makedirs(TOKEN_CONSUMPTION, exist_ok=True)
     mp.set_start_method('spawn', force=True)
     main()

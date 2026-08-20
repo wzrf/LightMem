@@ -459,6 +459,9 @@ def process_sample(
                 messages=[
                     {"role": "system", "content": user_prompt}
                 ],
+                extra_body={  # 关键配置
+                    "chat_template_kwargs": {"enable_thinking": False}
+                },
                 temperature=0.0
             )
             
@@ -498,7 +501,7 @@ def process_sample(
                 'judge_response': 'CORRECT' if int(label) == 1 else 'WRONG'
             }
             logger.info(
-                f"[{sample_id}] Judge: {'CORRECT' if int(label) == 1 else 'WRONG'}"
+                f"[{sample_id}] [golden answer={reference}] [system answer= {generated_answer}] Judge: {'CORRECT' if int(label) == 1 else 'WRONG'}"
             )
         except Exception as e:
             logger.error(f"[{sample_id}] Judge evaluation failed: {e}")

@@ -88,7 +88,10 @@ class LLMModel:
                     max_tokens=self.max_tokens,
                     temperature=self.temperature,
                     top_p=self.top_p,
-                    stream=False
+                    stream=False,
+                    extra_body={  # 关键配置
+                        "chat_template_kwargs": {"enable_thinking": False}
+                    },
                 )
                 response = completion.choices[0].message.content
                 print(response)
@@ -176,9 +179,11 @@ def process_item(item):
     construction_time = 0.0
 
     # 判断是否已经 Build 完成
+    do_build = True
     if os.path.exists(flag_file):
         print(f"question {qid} build complete flag found, skipping build.")
         lightmem = load_lightmem(collection_name=qid)
+        do_build = False
     else:
         # 如果未完成 Build，清理可能存在的未完成历史缓存
         if os.path.exists(qdrant_path):
@@ -211,6 +216,10 @@ def process_item(item):
                 )
                 if result != INIT_RESULT:
                     results_list.append(result)
+
+            llm_stats_tmp = lightmem.get_token_statistics()
+            print(llm_stats_tmp)
+
 
         time_end = time.time()
         construction_time = time_end - time_start
@@ -246,6 +255,11 @@ def process_item(item):
 
     print(f"question={item['question']}, golden answer={item['answer']}, system answer={generated_answer}")
 
+    if do_build:
+        add_memory_stats = lightmem.get_token_statistics()
+        with open(f"{TOKEN_CONSUMPTION}/{item['question_id']}.json", "w", encoding="utf-8") as f:
+            json.dump(add_memory_stats, f, ensure_ascii=False, indent=4)
+
     save_data = {
         "question_id": item["question_id"],
         "related_memories": related_memories,
@@ -277,8 +291,12 @@ def main():
         sys.exit(1)
 
 if __name__ == "__main__":
-    MAX_WORKERS = 32
+    MAX_WORKERS = 16
+    if os.environ.get('DEBUG') == "1":
+        MAX_WORKERS = 1
     RESULTS_DIR = '../results' ## mengyao_debug 测试结果
     QDRANT_DATA_DIR = './qdrant_data' ## 数据
     DATA_PATH = '../../data/longmemeval_mixed.json'
+    TOKEN_CONSUMPTION = "../token_consumption_build_memory_longmemeval/"
+    os.makedirs(TOKEN_CONSUMPTION, exist_ok=True)
     main()
