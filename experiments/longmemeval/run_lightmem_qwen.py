@@ -8,6 +8,7 @@ import sys
 from multiprocessing import Pool
 from lightmem.memory.lightmem import LightMemory
 import shutil
+import argparse
 
 # ============ API Configuration ============
 JUDGE_MODEL_API_KEY = 'sk-11ce7640e46049a6977c0d96ba855ffb'
@@ -154,6 +155,20 @@ def load_lightmem(collection_name):
         },
         "update": "offline",
     }
+    if extraction_mode == "event":
+        config = {
+            **config,
+            "summary_retriever": {  ## mengyao_debug struct mem
+                "model_name": "qdrant",
+                "configs": {
+                    "collection_name": f"{collection_name}_summary",
+                    "embedding_model_dims": 384,
+                    "path": f'{QDRANT_DATA_DIR}/{collection_name}_summary',
+                    "on_disk": True,
+                }
+            },
+            "extraction_mode": extraction_mode  ## mengyao_debug struct mem
+        }
     lightmem = LightMemory.from_config(config)
     return lightmem
 
@@ -270,7 +285,7 @@ def process_item(item):
         "correct": correct,
     }
 
-    filename = f"../lightmem_longmemeval_results/result_{item['question_id']}.json"
+    filename = f"{RESULTS_DIR}/result_{item['question_id']}.json"
     os.makedirs(os.path.dirname(filename), exist_ok=True)
     with open(filename, "w", encoding="utf-8") as f:
         json.dump(save_data, f, ensure_ascii=False, indent=4)
@@ -291,12 +306,25 @@ def main():
         sys.exit(1)
 
 if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--extraction_mode', type=str, default='flat',
+                       choices=['flat', 'event'],
+                       help='Extraction mode for LightMem')
+    args = parser.parse_args()
+
+    extraction_mode = args.extraction_mode ## mengyao_debug lightmem / structmem
+    post_tag=""
+
+    if extraction_mode == "event":
+        post_tag = "_event"
+
     MAX_WORKERS = 16
     if os.environ.get('DEBUG') == "1":
         MAX_WORKERS = 1
-    RESULTS_DIR = '../results' ## mengyao_debug 测试结果
-    QDRANT_DATA_DIR = './qdrant_data' ## 数据
+    RESULTS_DIR = f'../lightmem_longmemeval_results{post_tag}' ## mengyao_debug 测试结果
+    QDRANT_DATA_DIR = f'./qdrant_data{post_tag}' ## mengyao_debug build数据
     DATA_PATH = '../../data/longmemeval_mixed.json'
-    TOKEN_CONSUMPTION = "../token_consumption_build_memory_longmemeval/"
+    TOKEN_CONSUMPTION = f"../token_consumption_build_memory_longmemeval{post_tag}/" ## mengyao_debug token消耗
     os.makedirs(TOKEN_CONSUMPTION, exist_ok=True)
     main()

@@ -36,11 +36,6 @@ DATA_PATH = '../../data/locomo10.json'
 DATASET_TYPE = 'locomo'
 
 # Qdrant Storage Directories
-QDRANT_PRE_UPDATE_DIR = './qdrant_pre_update'
-QDRANT_POST_UPDATE_DIR = './qdrant_post_update'
-
-os.makedirs(QDRANT_PRE_UPDATE_DIR, exist_ok=True)
-os.makedirs(QDRANT_POST_UPDATE_DIR, exist_ok=True)
 
 # Parallel Processing Configuration
 USE_PROCESS_POOL = True
@@ -149,7 +144,7 @@ def extract_locomo_sessions(conversation_dict):
     return sessions, timestamps, speaker_a, speaker_b
 
 
-def load_lightmem(collection_name, api_key, args, base_dir=QDRANT_POST_UPDATE_DIR):
+def load_lightmem(collection_name, api_key, args, base_dir):
     config = {
         "pre_compress": True,
         "pre_compressor": {
@@ -206,7 +201,7 @@ def load_lightmem(collection_name, api_key, args, base_dir=QDRANT_POST_UPDATE_DI
         },
         "summary_retriever": { 
             "model_name": "qdrant",
-            "configs": { 
+            "configs": {
                 "collection_name": f"{collection_name}_summary",
                 "embedding_model_dims": 384,
                 "path": f'{base_dir}/{collection_name}_summary',  
@@ -278,7 +273,7 @@ def collection_entry_count(collection_name, base_dir):
 
 # ============ Core Processing Function ============
 
-def process_single_sample(sample, api_key, args, TOKEN_CONSUMPTION):
+def process_single_sample(sample, api_key, args, TOKEN_CONSUMPTION, QDRANT_PRE_UPDATE_DIR_, QDRANT_POST_UPDATE_DIR_):
     sample_id = sample['sample_id']
     logger = get_process_logger(sample_id)
     if args.extraction_mode == "event":
@@ -303,7 +298,7 @@ def process_single_sample(sample, api_key, args, TOKEN_CONSUMPTION):
         logger.info("Phase 1: Building memory (add_memory)")
         logger.info(f"{'─'*70}")
         
-        lightmem = load_lightmem(collection_name=sample_id, api_key=api_key, args=args)
+        lightmem = load_lightmem(collection_name=sample_id, api_key=api_key, args=args, base_dir=QDRANT_POST_UPDATE_DIR_)
 
         initial_stats = lightmem.get_token_statistics()
         case_start_time = time.time()
@@ -343,14 +338,14 @@ def process_single_sample(sample, api_key, args, TOKEN_CONSUMPTION):
         case_add_prompt = add_memory_stats['llm']['add_memory']['prompt_tokens'] - initial_stats['llm']['add_memory']['prompt_tokens']
         case_add_completion = add_memory_stats['llm']['add_memory']['completion_tokens'] - initial_stats['llm']['add_memory']['completion_tokens']
         
-        after_add_count = collection_entry_count(sample_id, QDRANT_POST_UPDATE_DIR)
+        after_add_count = collection_entry_count(sample_id, QDRANT_POST_UPDATE_DIR_)
         logger.info(f"✓ Add_memory completed: {after_add_count} entries in {add_memory_duration:.2f}s")
         logger.info(f"\n{'─'*70}")
         logger.info("Phase 2: Backing up pre-update state")
         logger.info(f"{'─'*70}")
         
-        source_dir = f'{QDRANT_POST_UPDATE_DIR}/{sample_id}'
-        backup_dir = f'{QDRANT_PRE_UPDATE_DIR}/{sample_id}'
+        source_dir = f'{QDRANT_POST_UPDATE_DIR_}/{sample_id}'
+        backup_dir = f'{QDRANT_PRE_UPDATE_DIR_}/{sample_id}'
         
         backup_start_time = time.time()
         
@@ -364,7 +359,7 @@ def process_single_sample(sample, api_key, args, TOKEN_CONSUMPTION):
         backup_end_time = time.time()
         backup_duration = backup_end_time - backup_start_time
         
-        pre_update_count = collection_entry_count(sample_id, QDRANT_PRE_UPDATE_DIR)
+        pre_update_count = collection_entry_count(sample_id, QDRANT_PRE_UPDATE_DIR_)
         logger.info(f"✓ Backup completed: {pre_update_count} entries in {backup_duration:.2f}s")
         
         # ============ Phase 2.5: Generate Summaries (Optional) ============
@@ -392,7 +387,7 @@ def process_single_sample(sample, api_key, args, TOKEN_CONSUMPTION):
                 collection_name=sample_id, 
                 api_key=api_key,
                 args=args,
-                base_dir=QDRANT_PRE_UPDATE_DIR  
+                base_dir=QDRANT_PRE_UPDATE_DIR_
             )
             
             summary_result = lightmem_for_summary.summarize(
@@ -452,7 +447,7 @@ def process_single_sample(sample, api_key, args, TOKEN_CONSUMPTION):
         case_update_prompt = update_end_stats['llm']['update']['prompt_tokens'] - update_start_stats['llm']['update']['prompt_tokens']
         case_update_completion = update_end_stats['llm']['update']['completion_tokens'] - update_start_stats['llm']['update']['completion_tokens']
         
-        post_update_count = collection_entry_count(sample_id, QDRANT_POST_UPDATE_DIR)
+        post_update_count = collection_entry_count(sample_id, QDRANT_POST_UPDATE_DIR_)
         logger.info(f"✓ Update completed: {post_update_count} entries in {update_duration:.2f}s")
         
         case_end_time = time.time()
@@ -466,8 +461,8 @@ def process_single_sample(sample, api_key, args, TOKEN_CONSUMPTION):
         logger.info(f"{'='*70}")
         
         logger.info(f"\n[Storage Information]")
-        logger.info(f"  Pre-update:  {QDRANT_PRE_UPDATE_DIR}/{sample_id} ({pre_update_count} entries)")
-        logger.info(f"  Post-update: {QDRANT_POST_UPDATE_DIR}/{sample_id} ({post_update_count} entries)")
+        logger.info(f"  Pre-update:  {QDRANT_PRE_UPDATE_DIR_}/{sample_id} ({pre_update_count} entries)")
+        logger.info(f"  Post-update: {QDRANT_POST_UPDATE_DIR_}/{sample_id} ({post_update_count} entries)")
         logger.info(f"  Change:      {post_update_count - pre_update_count:+d} entries")
         logger.info(f"  Summaries:   {num_summaries}")
         
@@ -535,6 +530,21 @@ def process_single_sample(sample, api_key, args, TOKEN_CONSUMPTION):
 
 def main():
     args = parse_args()
+
+    QDRANT_PRE_UPDATE_DIR = './qdrant_pre_update'
+    QDRANT_POST_UPDATE_DIR = './qdrant_post_update'
+    TOKEN_CONSUMPTION = "../token_consumption_build_memory_locomo"
+
+    if args.extraction_mode == "event":
+        QDRANT_PRE_UPDATE_DIR = f"{QDRANT_PRE_UPDATE_DIR}_event"
+        QDRANT_POST_UPDATE_DIR = f"{QDRANT_POST_UPDATE_DIR}_event"
+        TOKEN_CONSUMPTION = f"{TOKEN_CONSUMPTION}_event"
+    print(f"QDRANT_PRE_UPDATE_DIR={QDRANT_PRE_UPDATE_DIR}")
+
+    os.makedirs(QDRANT_PRE_UPDATE_DIR, exist_ok=True)
+    os.makedirs(QDRANT_POST_UPDATE_DIR, exist_ok=True)
+    os.makedirs(TOKEN_CONSUMPTION, exist_ok=True)
+
     main_logger = logging.getLogger("lightmem.parallel.main")
     main_logger.setLevel(logging.INFO)
     
@@ -601,6 +611,7 @@ def main():
         
         main_logger.info(f"✗ {sample_id}: Needs processing ({', '.join(status)})")
         missing.append(sample)
+
     
     main_logger.info(f"\nScan complete: {len(missing)}/{len(data)} samples need processing\n")
     
@@ -633,7 +644,7 @@ def main():
             api_key_idx = idx % len(API_KEYS)
             api_key = API_KEYS[api_key_idx]
             
-            future = executor.submit(process_single_sample, sample, api_key, args, TOKEN_CONSUMPTION)
+            future = executor.submit(process_single_sample, sample, api_key, args, TOKEN_CONSUMPTION, QDRANT_PRE_UPDATE_DIR, QDRANT_POST_UPDATE_DIR)
             future_to_sample[future] = sample
         
         # Process results as they complete
@@ -700,7 +711,5 @@ if __name__ == "__main__":
     MAX_WORKERS = 16
     if os.environ.get('DEBUG') == "1":
         MAX_WORKERS = 1
-    TOKEN_CONSUMPTION = "../token_consumption_build_memory_locomo/"
-    os.makedirs(TOKEN_CONSUMPTION, exist_ok=True)
     mp.set_start_method('spawn', force=True)
     main()

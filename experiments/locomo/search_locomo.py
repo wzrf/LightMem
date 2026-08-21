@@ -913,4 +913,6 @@ def main():
 
 
 if __name__ == "__main__":
+    ##mengyao_debug: 如果测试structmem，则调整 qdrant-dir为 qdrand_post_update_event.
+
     main()
