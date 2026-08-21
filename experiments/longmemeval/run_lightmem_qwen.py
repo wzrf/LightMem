@@ -270,7 +270,7 @@ def process_item(item):
         "correct": correct,
     }
 
-    filename = f"../results/result_{item['question_id']}.json"
+    filename = f"../lightmem_longmemeval_results/result_{item['question_id']}.json"
     os.makedirs(os.path.dirname(filename), exist_ok=True)
     with open(filename, "w", encoding="utf-8") as f:
         json.dump(save_data, f, ensure_ascii=False, indent=4)

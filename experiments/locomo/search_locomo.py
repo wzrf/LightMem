@@ -35,10 +35,10 @@ logging.basicConfig(
 logger = logging.getLogger("vector_baseline")
 
 # Default paths (can be overridden by command line arguments)
-DEFAULT_DATA_PATH = '/path/to/locomo_dataset.json'
+DEFAULT_DATA_PATH = '../../data/locomo10.json'
 DEFAULT_QDRANT_DIR = './qdrant_pre_update' 
 DEFAULT_EMBEDDING_MODEL_PATH = '/path/to/embedding-model'
-DEFAULT_RESULTS_DIR = './lightmem_locomo_results'
+DEFAULT_RESULTS_DIR = '../lightmem_locomo_results'
 DEFAULT_RETRIEVAL_LIMIT = 60
 
 
@@ -284,6 +284,11 @@ def build_prompt_with_speaker_memories(
 
 # ============ Sample Processing ============
 
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, List
+
+
 def process_sample(
     sample: Dict,
     entry_loader: QdrantEntryLoader,
@@ -297,11 +302,11 @@ def process_sample(
     total_limit: int,
     retrieval_mode: str,
     enable_summary: bool = False,
-    summary_limit: int = 5
+    summary_limit: int = 5,
+    max_qa_workers: int = 32,  # 新增 QA 并发数控制参数
 ) -> Dict:
-    """
-    Process a single sample with all its QA pairs.
-    
+    """Process a single sample with all its QA pairs in parallel.
+
     Args:
         sample: Sample dictionary containing conversation and QA pairs
         entry_loader: QdrantEntryLoader instance
@@ -316,80 +321,101 @@ def process_sample(
         retrieval_mode: 'per-speaker' or 'combined'
         enable_summary: Whether to retrieve and use summaries
         summary_limit: Retrieval limit for summaries
-        
+        max_qa_workers: Number of concurrent workers for QA processing
+
     Returns:
         Dictionary with sample results and statistics
     """
-    sample_id = sample['sample_id']
+    sample_id = sample["sample_id"]
     logger.info(f"\n{'='*80}")
     logger.info(f"Processing sample: {sample_id}")
     logger.info(f"{'='*80}")
-    
-    # Initialize token statistics
-    sample_token_stats = {
-        'total_prompt_tokens': 0,
-        'total_completion_tokens': 0,
-        'total_tokens': 0,
-        'api_calls': 0
-    }
-    
+
     # Load memory entries
     try:
         entries = entry_loader.load_entries(sample_id, with_vectors=True)
-        
+
         # Load summaries if enabled
         summaries = []
         if enable_summary:
-            summaries = entry_loader.load_summaries(sample_id, with_vectors=True)
+            summaries = entry_loader.load_summaries(
+                sample_id, with_vectors=True
+            )
             logger.info(
                 f"[{sample_id}] Loaded {len(entries)} entries + {len(summaries)} summaries"
             )
         else:
             logger.info(f"[{sample_id}] Loaded {len(entries)} entries")
-        
+
         if not entries:
             logger.error(f"[{sample_id}] No entries loaded")
             return {
-                'sample_id': sample_id,
-                'error': 'No entries loaded',
-                'results': [],
-                'token_stats': sample_token_stats
+                "sample_id": sample_id,
+                "error": "No entries loaded",
+                "results": [],
+                "token_stats": {
+                    "total_prompt_tokens": 0,
+                    "total_completion_tokens": 0,
+                    "total_tokens": 0,
+                    "api_calls": 0,
+                },
             }
     except Exception as e:
         logger.error(f"[{sample_id}] Failed to load entries: {e}")
         return {
-            'sample_id': sample_id,
-            'error': str(e),
-            'results': [],
-            'token_stats': sample_token_stats
+            "sample_id": sample_id,
+            "error": str(e),
+            "results": [],
+            "token_stats": {
+                "total_prompt_tokens": 0,
+                "total_completion_tokens": 0,
+                "total_tokens": 0,
+                "api_calls": 0,
+            },
         }
-    
-    # Process each QA pair
-    qa_results = []
-    for qa_idx, qa in enumerate(sample['qa']):
-        category = qa['category']
-        
-        # Skip category 5 and disallowed categories
+
+    # 1. 抽取并过滤有效的 QA 任务列表
+    valid_qa_tasks = []
+    for qa_idx, qa in enumerate(sample["qa"]):
+        category = qa["category"]
         if int(category) == 5 or category not in allow_categories:
             continue
-        
-        question = qa['question']
-        reference = qa['answer']
-        
-        logger.info(f"\n[{sample_id}] Question {qa_idx+1} (Category {category})")
+        valid_qa_tasks.append((qa_idx, qa))
+
+    if not valid_qa_tasks:
+        return {
+            "sample_id": sample_id,
+            "results": [],
+            "token_stats": {
+                "total_prompt_tokens": 0,
+                "total_completion_tokens": 0,
+                "total_tokens": 0,
+                "api_calls": 0,
+            },
+        }
+
+    # 2. 单个 QA 的处理函数
+    def _process_single_qa(qa_idx: int, qa: Dict) -> Dict:
+        category = qa["category"]
+        question = qa["question"]
+        reference = qa["answer"]
+
+        logger.info(
+            f"\n[{sample_id}] Question {qa_idx+1} (Category {category})"
+        )
         logger.info(f"Q: {question}")
         logger.info(f"A: {reference}")
-        
+
         # Retrieve relevant memories
         time_start = time.time()
-        
-        # Retrieve summaries if enabled
+
         retrieved_summaries = []
         if enable_summary and summaries:
-            retrieved_summaries = retrieve_summaries(summaries, retriever, question, summary_limit)
-        
-        # Retrieve entries based on mode
-        if retrieval_mode == 'per-speaker':
+            retrieved_summaries = retrieve_summaries(
+                summaries, retriever, question, summary_limit
+            )
+
+        if retrieval_mode == "per-speaker":
             retrieved_entries = retrieve_by_speaker(
                 entries, retriever, question, limit_per_speaker
             )
@@ -397,36 +423,38 @@ def process_sample(
             retrieved_entries = retrieve_combined(
                 entries, retriever, question, total_limit
             )
-        
+
         retrieval_time = time.time() - time_start
-        
+
         if not retrieved_entries:
             logger.warning(f"[{sample_id}] No entries retrieved")
-            qa_results.append({
-                'question': question,
-                'prediction': '',
-                'reference': reference,
-                'category': category,
-                'retrieved_count': 0,
-                'summary_count': 0 if enable_summary else None,
-                'retrieval_time': retrieval_time,
-                'speaker_distribution': {},
-                'error': 'No entries retrieved',
-                'metrics': {},
-                'token_usage': {
-                    'prompt_tokens': 0,
-                    'completion_tokens': 0,
-                    'total_tokens': 0
-                }
-            })
-            continue
-        
+            return {
+                "qa_idx": qa_idx,
+                "result": {
+                    "question": question,
+                    "prediction": "",
+                    "reference": reference,
+                    "category": category,
+                    "retrieved_count": 0,
+                    "summary_count": 0 if enable_summary else None,
+                    "retrieval_time": retrieval_time,
+                    "speaker_distribution": {},
+                    "error": "No entries retrieved",
+                    "metrics": {},
+                    "token_usage": {
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0,
+                    },
+                },
+            }
+
         # Calculate speaker distribution
         speaker_dist = {}
         for entry in retrieved_entries:
-            speaker = entry.get('_retrieved_speaker', 'Unknown')
+            speaker = entry.get("_retrieved_speaker", "Unknown")
             speaker_dist[speaker] = speaker_dist.get(speaker, 0) + 1
-        
+
         if enable_summary:
             logger.info(
                 f"[{sample_id}] Retrieved {len(retrieved_summaries)} summaries + "
@@ -437,99 +465,138 @@ def process_sample(
                 f"[{sample_id}] Retrieved {len(retrieved_entries)} entries in {retrieval_time:.3f}s"
             )
         logger.info(f"[{sample_id}] Speaker distribution: {speaker_dist}")
-        
+
         # Build prompt
         user_prompt = build_prompt_with_speaker_memories(
-            question, 
+            question,
             retrieved_entries,
             enable_summary=enable_summary,
-            summaries=retrieved_summaries if enable_summary else None
+            summaries=retrieved_summaries if enable_summary else None,
         )
-        
+
         # Generate answer
         token_usage = {
-            'prompt_tokens': 0,
-            'completion_tokens': 0,
-            'total_tokens': 0
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
         }
-        
+
         try:
             response = llm_client.chat.completions.create(
                 model=llm_model,
-                messages=[
-                    {"role": "system", "content": user_prompt}
-                ],
-                extra_body={  # 关键配置
-                    "chat_template_kwargs": {"enable_thinking": False}
-                },
-                temperature=0.0
+                messages=[{"role": "system", "content": user_prompt}],
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+                temperature=0.0,
+                max_tokens=4000
             )
-            
+
             generated_answer = response.choices[0].message.content
-            
+
             # Record token usage
-            if hasattr(response, 'usage') and response.usage:
-                token_usage['prompt_tokens'] = response.usage.prompt_tokens
-                token_usage['completion_tokens'] = response.usage.completion_tokens
-                token_usage['total_tokens'] = response.usage.total_tokens
-                
-                # Update sample statistics
-                sample_token_stats['total_prompt_tokens'] += token_usage['prompt_tokens']
-                sample_token_stats['total_completion_tokens'] += token_usage['completion_tokens']
-                sample_token_stats['total_tokens'] += token_usage['total_tokens']
-                sample_token_stats['api_calls'] += 1
-                
+            if hasattr(response, "usage") and response.usage:
+                token_usage["prompt_tokens"] = response.usage.prompt_tokens
+                token_usage["completion_tokens"] = (
+                    response.usage.completion_tokens
+                )
+                token_usage["total_tokens"] = response.usage.total_tokens
+
                 logger.info(
                     f"[{sample_id}] Token usage - Prompt: {token_usage['prompt_tokens']}, "
                     f"Completion: {token_usage['completion_tokens']}, "
                     f"Total: {token_usage['total_tokens']}"
                 )
-            
+
             logger.info(f"[{sample_id}] Generated: {generated_answer}")
         except Exception as e:
             logger.error(f"[{sample_id}] Failed to generate answer: {e}")
             generated_answer = ""
-        
+
         # Evaluate with LLM judge
         try:
             label = evaluate_llm_judge(
-                question, reference, generated_answer,
-                client_obj=judge_client, model_name=judge_model
+                question,
+                reference,
+                generated_answer,
+                client_obj=judge_client,
+                model_name=judge_model,
             )
             metrics = {
-                'judge_correct': int(label),
-                'judge_response': 'CORRECT' if int(label) == 1 else 'WRONG'
+                "judge_correct": int(label),
+                "judge_response": "CORRECT" if int(label) == 1 else "WRONG",
             }
             logger.info(
                 f"[{sample_id}] [golden answer={reference}] [system answer= {generated_answer}] Judge: {'CORRECT' if int(label) == 1 else 'WRONG'}"
             )
         except Exception as e:
             logger.error(f"[{sample_id}] Judge evaluation failed: {e}")
-            metrics = {'judge_correct': 0, 'judge_response': ''}
-        
+            metrics = {"judge_correct": 0, "judge_response": ""}
+
         # Store results
         result_dict = {
-            'question': question,
-            'prediction': generated_answer,
-            'reference': reference,
-            'category': category,
-            'retrieved_count': len(retrieved_entries),
-            'speaker_distribution': speaker_dist,
-            'retrieval_time': retrieval_time,
-            'metrics': metrics,
-            'token_usage': token_usage
+            "question": question,
+            "prediction": generated_answer,
+            "reference": reference,
+            "category": category,
+            "retrieved_count": len(retrieved_entries),
+            "speaker_distribution": speaker_dist,
+            "retrieval_time": retrieval_time,
+            "metrics": metrics,
+            "token_usage": token_usage,
         }
-        
-        # Add summary count if enabled
+
         if enable_summary:
-            result_dict['summary_count'] = len(retrieved_summaries)
-        
-        qa_results.append(result_dict)
-    
+            result_dict["summary_count"] = len(retrieved_summaries)
+
+        return {"qa_idx": qa_idx, "result": result_dict}
+
+    # 3. 并发执行所有 QA 任务
+    indexed_qa_results = []
+    with ThreadPoolExecutor(
+        max_workers=min(max_qa_workers, len(valid_qa_tasks))
+    ) as executor:
+        futures = [
+            executor.submit(_process_single_qa, qa_idx, qa)
+            for qa_idx, qa in valid_qa_tasks
+        ]
+        for future in as_completed(futures):
+            try:
+                indexed_qa_results.append(future.result())
+            except Exception as e:
+                logger.error(
+                    f"[{sample_id}] QA execution encountered error: {e}"
+                )
+
+    # 4. 排序恢复原本的 QA 逻辑顺序，并统一汇总 token 统计数据
+    indexed_qa_results.sort(key=lambda x: x["qa_idx"])
+
+    qa_results = []
+    sample_token_stats = {
+        "total_prompt_tokens": 0,
+        "total_completion_tokens": 0,
+        "total_tokens": 0,
+        "api_calls": 0,
+    }
+
+    for item in indexed_qa_results:
+        res = item["result"]
+        qa_results.append(res)
+
+        # 汇总并发收集到的 Token 统计
+        t_usage = res.get("token_usage", {})
+        p_tok = t_usage.get("prompt_tokens", 0)
+        c_tok = t_usage.get("completion_tokens", 0)
+        tot_tok = t_usage.get("total_tokens", 0)
+
+        if p_tok > 0 or c_tok > 0:
+            sample_token_stats["total_prompt_tokens"] += p_tok
+            sample_token_stats["total_completion_tokens"] += c_tok
+            sample_token_stats["total_tokens"] += tot_tok
+            sample_token_stats["api_calls"] += 1
+
     return {
-        'sample_id': sample_id,
-        'results': qa_results,
-        'token_stats': sample_token_stats
+        "sample_id": sample_id,
+        "results": qa_results,
+        "token_stats": sample_token_stats,
     }
 
 
@@ -660,7 +727,7 @@ def main():
         'total_tokens': 0,
         'total_api_calls': 0
     }
-    
+
     # Process all samples
     all_results = []
     all_metrics = []
@@ -668,7 +735,7 @@ def main():
     total_questions = 0
     category_counts = {1: 0, 2: 0, 3: 0, 4: 0}
     total_summaries_used = 0
-    
+
     for sample in tqdm(samples, desc="Processing samples"):
         sample_result = process_sample(
             sample, entry_loader, retriever,
@@ -679,16 +746,16 @@ def main():
             enable_summary=args.enable_summary,
             summary_limit=args.summary_limit
         )
-        
+
         all_results.append(sample_result)
-        
+
         # Update global statistics
         sample_token_stats = sample_result.get('token_stats', {})
         global_token_stats['total_prompt_tokens'] += sample_token_stats.get('total_prompt_tokens', 0)
         global_token_stats['total_completion_tokens'] += sample_token_stats.get('total_completion_tokens', 0)
         global_token_stats['total_tokens'] += sample_token_stats.get('total_tokens', 0)
         global_token_stats['total_api_calls'] += sample_token_stats.get('api_calls', 0)
-        
+
         # Collect metrics
         for qa_result in sample_result.get('results', []):
             total_questions += 1
@@ -696,11 +763,11 @@ def main():
             category_counts[category] += 1
             all_metrics.append(qa_result['metrics'])
             all_categories.append(category)
-            
+
             # Count summaries if enabled
             if args.enable_summary and 'summary_count' in qa_result:
                 total_summaries_used += qa_result['summary_count']
-        
+
         # Save individual sample result
         sample_file = os.path.join(args.output_dir, f"sample_{sample['sample_id']}.json")
         with open(sample_file, 'w', encoding='utf-8') as f:
