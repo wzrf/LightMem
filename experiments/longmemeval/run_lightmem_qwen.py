@@ -311,6 +311,8 @@ if __name__ == "__main__":
     parser.add_argument('--extraction_mode', type=str, default='flat',
                        choices=['flat', 'event'],
                        help='Extraction mode for LightMem')
+    parser.add_argument('--dataset', type=str, default='../../data/longmemeval_s_cleaned.json',
+                        help='Path to LongMemEval dataset')
     args = parser.parse_args()
 
     extraction_mode = args.extraction_mode ## mengyao_debug lightmem / structmem
@@ -324,7 +326,7 @@ if __name__ == "__main__":
         MAX_WORKERS = 1
     RESULTS_DIR = f'../lightmem_longmemeval_results{post_tag}' ## mengyao_debug 测试结果
     QDRANT_DATA_DIR = f'./qdrant_data{post_tag}' ## mengyao_debug build数据
-    DATA_PATH = '../../data/longmemeval_mixed.json'
+    DATA_PATH = args.dataset
     TOKEN_CONSUMPTION = f"../token_consumption_build_memory_longmemeval{post_tag}/" ## mengyao_debug token消耗
     os.makedirs(TOKEN_CONSUMPTION, exist_ok=True)
     main()
