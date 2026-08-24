@@ -428,7 +428,7 @@ def process_single_sample(sample, api_key, args, TOKEN_CONSUMPTION, QDRANT_PRE_U
             logger.info(f"{'─'*70}")
         
         logger.info(f"\n{'─'*70}")
-        logger.info("Phase 3: Performing offline update")
+        logger.info("============================Phase 3: Performing offline update============================")
         logger.info(f"{'─'*70}")
         
         update_start_stats = lightmem.get_token_statistics()

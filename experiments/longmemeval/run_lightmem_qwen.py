@@ -102,6 +102,30 @@ class LLMModel:
                 if attempt == max_retries - 1:
                     raise
 
+    def call_with_tokens(self, messages: list, **kwargs):
+        max_retries = kwargs.get("max_retries", 3)
+
+        for attempt in range(max_retries):
+            try:
+                completion = self.client.chat.completions.create(
+                    model=self.name,
+                    messages=messages,
+                    max_tokens=self.max_tokens,
+                    temperature=self.temperature,
+                    top_p=self.top_p,
+                    stream=False,
+                    extra_body={  # 关键配置
+                        "chat_template_kwargs": {"enable_thinking": False}
+                    },
+                )
+                response = completion.choices[0].message.content
+                print(response)
+                return response, completion.usage.prompt_tokens, completion.usage.completion_tokens
+            except Exception as e:
+                print(f"[Retry {attempt + 1}/{max_retries}]  {type(e).__name__}: {e}")
+                if attempt == max_retries - 1:
+                    raise
+
 
 def load_lightmem(collection_name):
     config = {
@@ -253,7 +277,7 @@ def process_item(item):
         "role": "user",
         "content": f"Question time:{item['question_date']} and question:{item['question']}\nPlease answer the question based on the following memories: {memory_text}"
     })
-    generated_answer = llm.call(messages)
+    generated_answer, prompt_tokens, completion_tokens = llm.call_with_tokens(messages)
 
     if 'abs' in item["question_id"]:
         prompt = get_anscheck_prompt(
@@ -283,6 +307,8 @@ def process_item(item):
         "generated_answer": generated_answer,
         "ground_truth": item["answer"],
         "correct": correct,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
     }
 
     filename = f"{RESULTS_DIR}/result_{item['question_id']}.json"
