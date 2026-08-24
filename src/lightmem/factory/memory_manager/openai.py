@@ -237,7 +237,9 @@ class OpenaiManager:
                 "usage": {
                     "prompt_tokens": 0,
                     "completion_tokens": 0,
-                    "total_tokens": 0
+                    "total_tokens": 0,
+                    "reuse_history_tokens": 0,
+                    "straight_use_tokens": 0,
                 }
             }
             
@@ -350,6 +352,11 @@ class OpenaiManager:
                     response_format={"type": "json_object"},
                 )
                 metadata_facts = clean_response(raw_response)
+
+                if entry_type == "factual":
+                    usage_info["straight_use_tokens"] = len(user_prompt)
+                elif entry_type == "relational":
+                    usage_info["reuse_history_tokens"] = len(user_prompt)
                 
                 for entry in metadata_facts:
                     entry["entry_type"] = entry_type

@@ -148,6 +148,8 @@ class LightMemory:
             "update_calls": 0,
             "update_prompt_tokens": 0,
             "update_completion_tokens": 0,
+            "straight_use_tokens": 0,
+            "reuse_history_tokens": 0,
             "update_total_tokens": 0,
             "embedding_calls": 0,
             "embedding_total_tokens": 0,
@@ -538,7 +540,7 @@ class LightMemory:
         )
         self.logger.info(f"========== END {call_id} ==========")
 
-    def offline_update_all_entries(self, score_threshold: float = 0.9, max_workers: int = 5):
+    def offline_update_all_entries(self, score_threshold: float = 0.9, max_workers: int = 16):
         """
         Perform offline updates for all entries based on their update_queue, in parallel.
 
@@ -566,7 +568,8 @@ class LightMemory:
             "calls": 0,
             "prompt_tokens": 0,
             "completion_tokens": 0,
-            "total_tokens": 0
+            "total_tokens": 0,
+            "reuse_history_tokens": 0
         }
         token_lock = threading.Lock()
         def update_entry(entry):
@@ -593,6 +596,9 @@ class LightMemory:
 
             updated_entry = self.manager._call_update_llm(UPDATE_PROMPT, entry, candidate_sources)
 
+            target_memory = entry["payload"]["memory"]
+            candidate_memories = "".join(c["payload"]["memory"] for c in candidate_sources)
+
             if updated_entry is None:
                 return
             # ====== token consumption ======
@@ -602,6 +608,7 @@ class LightMemory:
                 update_token_stats["prompt_tokens"] += usage.get("prompt_tokens", 0)
                 update_token_stats["completion_tokens"] += usage.get("completion_tokens", 0)
                 update_token_stats["total_tokens"] += usage.get("total_tokens", 0)
+                update_token_stats["reuse_history_tokens"] += len(target_memory) + len(candidate_memories)
                 
             self.logger.debug(
                 f"[{call_id}] Update LLM call for {eid} - "
@@ -631,7 +638,8 @@ class LightMemory:
             self.token_stats["update_calls"] += update_token_stats["calls"]
             self.token_stats["update_prompt_tokens"] += update_token_stats["prompt_tokens"]
             self.token_stats["update_completion_tokens"] += update_token_stats["completion_tokens"]
-            self.token_stats["update_total_tokens"] += update_token_stats["total_tokens"]    
+            self.token_stats["update_total_tokens"] += update_token_stats["total_tokens"]
+            self.token_stats["reuse_history_tokens"] += update_token_stats["reuse_history_tokens"]
         self.logger.info(f"[{call_id}] Offline update completed:")
         self.logger.info(f"[{call_id}]   - Processed: {processed_count} entries")
         self.logger.info(f"[{call_id}]   - Updated: {updated_count} entries")
@@ -733,6 +741,8 @@ class LightMemory:
                     "completion_tokens": self.token_stats["update_completion_tokens"],
                     "total_tokens": self.token_stats["update_total_tokens"],
                 },
+                "straight_use_tokens": self.token_stats["straight_use_tokens"],
+                "reuse_history_tokens": self.token_stats["reuse_history_tokens"],
                 "summarize": {
                 "calls": self.token_stats["summarize_calls"],
                 "prompt_tokens": self.token_stats["summarize_prompt_tokens"],

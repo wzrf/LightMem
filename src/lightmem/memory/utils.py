@@ -245,7 +245,10 @@ def convert_extraction_results_to_memory_entries(
                 fact_list = [fact_list]
 
             for fact_entry in fact_list:
-                original_sid = int(fact_entry.get("source_id", 0))
+                try:
+                    original_sid = int(fact_entry.get("source_id", 0))
+                except Exception as e:
+                    original_sid = 0
                 sid = original_sid
                 
                 if max_valid_sid is not None and sid > max_valid_sid:
@@ -310,7 +313,10 @@ def _create_memory_entry_from_fact(
     Returns:
         MemoryEntry object or None if creation fails
     """
-    source_id = int(fact_entry.get("source_id", 0))
+    try:
+        source_id = int(fact_entry.get("source_id", 0))
+    except Exception as e:
+        source_id = 0
     sequence_n = source_id * 2
 
     try:
@@ -389,6 +395,8 @@ def process_extraction_results(
             token_stats["add_memory_prompt_tokens"] += usage.get("prompt_tokens", 0)
             token_stats["add_memory_completion_tokens"] += usage.get("completion_tokens", 0)
             token_stats["add_memory_total_tokens"] += usage.get("total_tokens", 0)
+            token_stats["straight_use_tokens"] += usage.get("straight_use_tokens", 0)
+            token_stats["reuse_history_tokens"] += usage.get("reuse_history_tokens", 0)
             logger.info(
                 f"[{call_id}] API Call {idx} tokens - "
                 f"Prompt: {usage.get('prompt_tokens', 0)}, "
