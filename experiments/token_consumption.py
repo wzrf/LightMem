@@ -125,6 +125,39 @@ def parse_longmemeval_results(data):
     return items
 
 
+def parse_halumem_results(data):
+    """解析 HaLuMem 数据集结构"""
+    items = []
+    # data 可能是一个列表
+    if isinstance(data, list):
+        for item in data:
+            cat = item.get("question_type", "uncategorized")
+            cat_key = f"HaMem {cat}"
+            pred = item.get("answer", "")
+            ref = item.get("reference", "")
+
+            judge_score = None
+            if "metrics" in item and "llm_judge_score" in item["metrics"]:
+                judge_score = float(item["metrics"]["llm_judge_score"])
+
+            # 构建 token_usage 字典，包含 answer 和 build_memory tokens
+            token_usage = {
+                "prompt_tokens": item.get("answer_prompt_tokens", 0),
+                "completion_tokens": item.get("answer_completion_tokens", 0),
+                "build_memory_prompt_tokens": item.get("turn_build_memory_prompt_tokens", 0),
+                "build_memory_completion_tokens": item.get("turn_build_memory_completion_tokens", 0),
+            }
+
+            items.append({
+                "category": cat_key,
+                "prediction": pred,
+                "reference": ref,
+                "judge_correct": judge_score,
+                "token_usage": token_usage,
+            })
+    return items
+
+
 def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
     token_folder = Path(token_dir)
     result_folder = Path(result_dir)
@@ -176,6 +209,8 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
 
     question_prompt_tokens = []
     question_completion_tokens = []
+    build_memory_prompt_tokens = []
+    build_memory_completion_tokens = []
     if result_folder.exists():
         for file_path in result_folder.glob("**/*.json"):
             try:
@@ -184,6 +219,8 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
 
                 if "generated_answer" in data:
                     parsed_items = parse_longmemeval_results(data)
+                elif isinstance(data, list) and len(data) > 0 and "turn_build_memory_prompt_tokens" in data[0]:
+                    parsed_items = parse_halumem_results(data)
                 else:
                     parsed_items = parse_locomo_results(data)
 
@@ -192,9 +229,18 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
                     pred = item["prediction"]
                     ref = item["reference"]
                     judge_score = item["judge_correct"]
-                    if item["token_usage"] is not {}:
-                        question_prompt_tokens.append(item["token_usage"]["prompt_tokens"])
-                        question_completion_tokens.append(item["token_usage"]["completion_tokens"])
+                    token_usage = item["token_usage"]
+                    if token_usage:
+                        # 收集问题回答的token消耗
+                        if "prompt_tokens" in token_usage:
+                            question_prompt_tokens.append(token_usage["prompt_tokens"])
+                        if "completion_tokens" in token_usage:
+                            question_completion_tokens.append(token_usage["completion_tokens"])
+                        # 收集构建记忆的token消耗
+                        if "build_memory_prompt_tokens" in token_usage:
+                            build_memory_prompt_tokens.append(token_usage["build_memory_prompt_tokens"])
+                        if "build_memory_completion_tokens" in token_usage:
+                            build_memory_completion_tokens.append(token_usage["build_memory_completion_tokens"])
 
                     # 计算 F1
                     f1_score = compute_f1(pred, ref)
@@ -239,6 +285,15 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
         print(
             f"[QUESTION] Average Prompt Tokens    : {question_prompt_tokens_avg:.2f}\n"
             f"[QUESTION] Average Completion Tokens: {question_completion_tokens_avg:.2f}"
+        )
+
+    if len(build_memory_prompt_tokens) > 0:
+        build_memory_prompt_avg = sum(build_memory_prompt_tokens) / len(build_memory_prompt_tokens)
+        build_memory_completion_avg = sum(build_memory_completion_tokens) / len(build_memory_completion_tokens)
+
+        print(
+            f"[Build Memory] Average Prompt Tokens    : {build_memory_prompt_avg:.2f}\n"
+            f"[Build Memory] Average Completion Tokens: {build_memory_completion_avg:.2f}"
         )
 
     if metrics_by_category:
@@ -309,14 +364,19 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
 if __name__ == "__main__":
     tasks = [
         (
-            "./token_consumption_build_memory_locomo_event",
-            "./lightmem_locomo_results_event",
+            "./experiments/token_consumption_build_memory_locomo_event",
+            "./experiments/lightmem_locomo_results",
             "locomo",
         ),
         (
-            "./token_consumption_build_memory_longmemeval_event",
-            "./lightmem_longmemeval_results_event",
+            "./experiments/token_consumption_build_memory_longmemeval_event",
+            "./experiments/lightmem_longmemeval_results_event",
             "longmemeval",
+        ),
+        (
+            "./experiments/token_consumption_build_memory_halumem_event",
+            "./experiments/lightmem_halumem_results_event",
+            "halumem",
         ),
     ]
 
