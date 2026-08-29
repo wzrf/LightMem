@@ -140,7 +140,7 @@ class VectorRetriever:
             return 0.0
         return float(np.dot(a, b) / (na * nb))
 
-def format_related_memories(related: List[Dict[str, Any]]) -> str:
+def format_related_memories(related: List[Dict[str, Any]]) -> (str, list):
     out: List[str] = []
     for item in related:
         payload = item.get('payload', {}) if isinstance(item, dict) else {}
@@ -157,4 +157,4 @@ def format_related_memories(related: List[Dict[str, Any]]) -> str:
     
         out.append(formatted.strip())
     
-    return "\n\n".join(out)  
+    return "\n\n".join(out), out

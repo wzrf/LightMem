@@ -1,3 +1,4 @@
+import os
 import uuid
 import re
 import copy
@@ -211,6 +212,7 @@ class LightMemory:
         force_segment: bool = False, 
         force_extract: bool = False,
         boundmem_tags: Optional[Any] = None,
+        fusionrag: bool = False,
     ):
         """
         Add new memory entries from message history.
@@ -841,21 +843,34 @@ class LightMemory:
             has_entry_type = any(e["payload"].get("entry_type") for e in Cbuf)
             buffer_text = format_entries_for_prompt(Cbuf, include_type_tag=has_entry_type)
             supplementary_text = format_entries_for_prompt(Sk, include_type_tag=has_entry_type)
+            supplementary_text_list = format_entries_for_prompt_list(Sk, include_type_tag=has_entry_type)
             time_range_str = f"{Cbuf[0]['payload']['time_stamp']} - {Cbuf[-1]['payload']['time_stamp']}"
             speakers = list(set(
                 e["payload"].get("speaker_name") or e["payload"].get("speaker_id") or "?"
                 for e in Cbuf
             ))
-            summary_text = call_summary_llm(
-                manager=self.manager,
-                buffer_text=buffer_text,
-                supplementary_text=supplementary_text,
-                time_range=time_range_str,
-                speakers=speakers,
-                custom_prompt=SUMMARY_PROMPT,
-                token_stats=self.token_stats,
-                logger=self.logger
-            )
+            if os.getenv("FUSIONRAG", "").lower() == "true":
+                summary_text = call_summary_llm_fusionrag(
+                    manager=self.manager,
+                    buffer_text=buffer_text,
+                    supplementary_text_list=supplementary_text_list,
+                    time_range=time_range_str,
+                    speakers=speakers,
+                    custom_prompt=SUMMARY_PROMPT,
+                    token_stats=self.token_stats,
+                    logger=self.logger
+                )
+            else:
+                summary_text = call_summary_llm(
+                    manager=self.manager,
+                    buffer_text=buffer_text,
+                    supplementary_text=supplementary_text,
+                    time_range=time_range_str,
+                    speakers=speakers,
+                    custom_prompt=SUMMARY_PROMPT,
+                    token_stats=self.token_stats,
+                    logger=self.logger
+                )
             self.logger.debug(f"[{call_id}] Generated {len(summary_text)} chars")
             summary_id = store_summary(
                 summary_text=summary_text,

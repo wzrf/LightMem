@@ -31,6 +31,19 @@ class MemoryEntry:
     consolidated: bool = False
     bam_tags: List[Any] = field(default_factory=list)
     
+def clean_json(response: str) -> str:
+    """
+    Cleans the model response by:
+    1. Removing enclosing code block markers (```[language] ... ```).
+    2. Parsing the JSON content safely.
+    3. Returning the value of the "data" key if present, otherwise trying to return the parsed list/dict.
+    """
+    pattern = r"```(?:json)?\s*([\s\S]*?)\s*```"
+    match = re.search(pattern, response.strip())
+    cleaned = match.group(1).strip() if match else response.strip()
+
+    return cleaned
+
 def clean_response(response: str) -> List[Dict[str, Any]]:
     """
     Cleans the model response by:
@@ -500,6 +513,28 @@ def format_entries_for_prompt(
         lines.append(f"{type_tag}{time_tag} {speaker}: {memory}")
     return "\n".join(lines)
 
+
+def format_entries_for_prompt_list(
+        entries: List[Dict],
+        include_type_tag: bool = True
+) -> list[str]:
+    if not entries:
+        return []
+
+    lines = []
+    for entry in entries:
+        payload = entry["payload"]
+        speaker = payload.get("speaker_name") or payload.get("speaker_id") or "?"
+        timestamp = payload.get("time_stamp", "")
+        weekday = payload.get("weekday", "")
+        memory = payload.get("memory", "")
+        type_tag = ""
+        if include_type_tag and payload.get("entry_type"):
+            type_tag = f"[{payload['entry_type'].upper()}] "
+        time_tag = f"[{timestamp}, {weekday}]" if timestamp and weekday else f"[{timestamp}]"
+        lines.append(f"{type_tag}{time_tag} {speaker}: {memory}")
+    return lines
+
 def call_summary_llm(
     manager,
     buffer_text: str,
@@ -550,6 +585,46 @@ def call_summary_llm(
             f"tokens: {usage_info.get('total_tokens', 0)}"
         )
     
+    return response
+
+def call_summary_llm_fusionrag(
+        manager,
+        buffer_text: str,
+        supplementary_text_list: list[str],
+        time_range: str,
+        speakers: List[str],
+        custom_prompt: Optional[str] = None,
+        token_stats: Dict[str, int] = None,
+        logger=None
+) -> str:
+    from lightmem.memory.prompts import LoCoMo_Cross_Event_Consolidation_prefix, LoCoMo_Cross_Event_Consolidation_postfix
+    speakers_str = ", ".join(sorted(speakers))
+    prompt_template = LoCoMo_Cross_Event_Consolidation_prefix
+
+    prefix = prompt_template.format(
+        bucket=time_range,
+        speakers=speakers_str,
+        aggregated_text=buffer_text,
+    )
+
+    response, usage_info = manager.generate_response_with_fusionrag(
+        system_prompt="You are a professional conversation summarization assistant with temporal awareness.",
+        fusionrag_cache_list=supplementary_text_list,
+        prefix=prefix,
+        query_prompt=LoCoMo_Cross_Event_Consolidation_postfix
+    )
+    if token_stats is not None:
+        token_stats["summarize_calls"] += 1
+        token_stats["summarize_prompt_tokens"] += usage_info.get("prompt_tokens", 0)
+        token_stats["summarize_completion_tokens"] += usage_info.get("completion_tokens", 0)
+        token_stats["summarize_total_tokens"] += usage_info.get("total_tokens", 0)
+
+    if logger:
+        logger.debug(
+            f"Summary generated: {len(response)} chars, "
+            f"tokens: {usage_info.get('total_tokens', 0)}"
+        )
+
     return response
 
 def store_summary(

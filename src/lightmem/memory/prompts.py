@@ -331,6 +331,43 @@ What to DO:
 Output the summary directly without any additional explanations or format markers.
 """
 
+LoCoMo_Cross_Event_Consolidation_prefix = """
+You are a professional conversation summarization assistant. 
+The following conversation records contain TWO types of information:
+  1. **Factual information**: concrete events, plans, opinions, preferences
+  2. **Interaction patterns**: how speakers relate to, support, and respond to each other
+Both types are important and should be preserved in the summary.
+Conversation Time: {bucket}
+Participants: {speakers}
+Conversation Records: 
+{aggregated_text}
+Related Temporal Context (from other time periods):
+"""
+
+LoCoMo_Cross_Event_Consolidation_postfix = """
+Please generate a summary with the following requirements:
+CRITICAL - What to PRESERVE:
+  - Specific concrete details: dates, times, locations, names of things
+  - Key emotional transitions and psychological changes 
+  - Concrete action plans
+  - Important quotes or specific expressions when they capture essential meaning
+  - Temporal connections: When related context reveals specific prior events or future plans 
+    that directly relate to current topics, integrate them naturally with timestamps
+What to DO:
+  1. Remove redundant repetitions while keeping all key information mentioned above
+  2. Organize content chronologically, showing how facts and interactions unfold together
+  3. Highlight causal relationships (e.g., "X happened, which gave Y the courage to do Z")
+  4. When integrating temporal context:
+    - Cite specific times if available (e.g., "on 2022 April 15...")
+    - Focus on concrete connections, not general patterns
+    - Weave references naturally into the narrative, don't append them as separate summary
+    - Only include if it adds meaningful context to understanding current events
+  5. Balance factual timeline with emotional/relational dynamics
+  6. Use fluent, concise natural language
+  7. Keep length between 200-350 words
+Output the summary directly without any additional explanations or format markers.
+"""
+
 UPDATE_PROMPT = """
 You are a memory management assistant. 
 Your task is to decide whether the target memory should be updated, deleted, or ignored 

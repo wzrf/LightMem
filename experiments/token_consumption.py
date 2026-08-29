@@ -177,8 +177,9 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
 
                 if "llm" in data and isinstance(data["llm"], dict):
                     for item in data["llm"].values():
-                        prompt_tokens += item.get("prompt_tokens", 0)
-                        completion_tokens += item.get("completion_tokens", 0)
+                        if isinstance(item, dict):
+                            prompt_tokens += item.get("prompt_tokens", 0)
+                            completion_tokens += item.get("completion_tokens", 0)
                 else:
                     prompt_tokens = data.get("prompt_tokens", 0)
                     completion_tokens = data.get("completion_tokens", 0)
@@ -364,20 +365,20 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
 if __name__ == "__main__":
     tasks = [
         (
-            "./experiments/token_consumption_build_memory_locomo_event",
-            "./experiments/lightmem_locomo_results",
+            "./token_consumption_build_memory_locomo_event",
+            "./lightmem_locomo_results_event",
             "locomo",
         ),
-        (
-            "./experiments/token_consumption_build_memory_longmemeval_event",
-            "./experiments/lightmem_longmemeval_results_event",
-            "longmemeval",
-        ),
-        (
-            "./experiments/token_consumption_build_memory_halumem_event",
-            "./experiments/lightmem_halumem_results_event",
-            "halumem",
-        ),
+        # (
+        #     "./experiments/token_consumption_build_memory_longmemeval_event",
+        #     "./experiments/lightmem_longmemeval_results_event",
+        #     "longmemeval",
+        # ),
+        # (
+        #     "./experiments/token_consumption_build_memory_halumem_event",
+        #     "./experiments/lightmem_halumem_results_event",
+        #     "halumem",
+        # ),
     ]
 
     for token_path, result_path, name in tasks:

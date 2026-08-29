@@ -347,6 +347,9 @@ if __name__ == "__main__":
     if extraction_mode == "event":
         post_tag = "_event"
 
+    if os.getenv("FUSIONRAG", "").lower() == "true":
+        post_tag += "_fusionrag"
+
     MAX_WORKERS = 16
     if os.environ.get('DEBUG') == "1":
         MAX_WORKERS = 1

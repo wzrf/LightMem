@@ -43,10 +43,10 @@ USE_PROCESS_POOL = True
 # ============ Arguments ============
 def parse_args():
     parser = argparse.ArgumentParser(description="Parallel Memory Building with LightMem")
-    parser.add_argument('--extraction_mode', type=str, default='flat', 
+    parser.add_argument('--extraction_mode', type=str, default='flat', ##mengyao_debug: event=structmem
                        choices=['flat', 'event'], 
                        help='Extraction mode for LightMem')
-    parser.add_argument('--enable_summary', action='store_true', 
+    parser.add_argument('--enable_summary', action='store_true',  ##mengyao_debug: summary=structmem
                        help='Whether to generate summaries')
     parser.add_argument('--summary_time_window', type=int, default=3600, 
                        help='Time window for summarization (in seconds)')
@@ -539,6 +539,12 @@ def main():
         QDRANT_PRE_UPDATE_DIR = f"{QDRANT_PRE_UPDATE_DIR}_event"
         QDRANT_POST_UPDATE_DIR = f"{QDRANT_POST_UPDATE_DIR}_event"
         TOKEN_CONSUMPTION = f"{TOKEN_CONSUMPTION}_event"
+
+    if os.getenv("FUSIONRAG", "").lower() == "true":
+        QDRANT_PRE_UPDATE_DIR = f"{QDRANT_PRE_UPDATE_DIR}_fusionrag"
+        QDRANT_POST_UPDATE_DIR = f"{QDRANT_POST_UPDATE_DIR}_fusionrag"
+        TOKEN_CONSUMPTION = f"{TOKEN_CONSUMPTION}_fusionrag"
+
     print(f"QDRANT_PRE_UPDATE_DIR={QDRANT_PRE_UPDATE_DIR}")
 
     os.makedirs(QDRANT_PRE_UPDATE_DIR, exist_ok=True)

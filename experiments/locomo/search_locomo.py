@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional
 import numpy as np
 import argparse
 
+from experiments.locomo.prompts import ANSWER_PROMPT_PREFIX
 from lightmem.factory.text_embedder.huggingface import TextEmbedderHuggingface
 from lightmem.factory.text_embedder.openai import TextEmbedderOpenAI
 from lightmem.configs.text_embedder.base_config import BaseTextEmbedderConfig
@@ -16,7 +17,82 @@ from lightmem.configs.text_embedder.base_config import BaseTextEmbedderConfig
 from prompts import ANSWER_PROMPT, ANSWER_PROMPT_StructMem
 from retrievers import QdrantEntryLoader, VectorRetriever, format_related_memories
 from llm_judge import evaluate_llm_judge
+from lightmem.fusionrag.run_question import FusionRAGModel
+from lightmem.fusionrag.sglang_kvcache import run_one_question_sglang
 
+fusion_rag_model = FusionRAGModel(
+            model_path='',
+            use_multi_gpu=True,
+            model_type="qwen3",
+            model_name="Qwen3-32B",
+            draft_model_type="qwen",
+            draft_model_name="qwen2.5-3b",
+            preprocess_model_path="/data2/qy_tmp/xumengyao/bge-m3",
+            draft_model_path="/mnt/qjhs-sh-lab-01/models/Qwen2.5-3B-Instruct",
+            draft_model_url="http://127.0.0.1:30005/v1/completions",
+            apikey="xxx",
+            use_local_draft_model=False,
+        )
+
+
+def generate_response_with_fusionrag(
+        system_prompt: str,
+        prefix: str,
+        fusionrag_cache_list: list[str],
+        query_prompt: str,
+        model: str = "qwen3-8b",
+        max_tokens=5000,
+        recomputation_rate=0.3,
+        sglang_url="http://127.0.0.1:30003/v1/completions",
+        sglang_url_prefiller="http://127.0.0.1:30003/v1/completions"
+) -> Optional[str]:
+    template = {
+        "DEFAULT_SYSTEM_PROMPT": f"""<|im_start|>system\n{system_prompt}\n{prefix}""",
+        "USER_PROMPT": f"""<|im_end|>\n<|im_start|>user\n\nQuestion: /no_think {query_prompt}<|im_end|>\n<|im_start|>assistant\nAnswer: </think>"""
+    }
+
+    recompute_tokens, recompute_tokens_list, retrieved_docs, recompute_rate, sorted_doc_index, sorted_doc_index_before, _ = fusion_rag_model.draft_one_question(
+        template["DEFAULT_SYSTEM_PROMPT"],  ## DEFAULT_SYSTEM_PROMPT
+        fusionrag_cache_list,
+        template["USER_PROMPT"],
+        recomputation_rate,
+        "",
+        False,
+        False,
+        [],
+        False,
+        False,  ## if do preprocess
+        False,
+        True
+    )
+
+    try:
+        content, usage, top_logprobs, real_recomputation_rate = run_one_question_sglang(
+            DEFAULT_SYSTEM_PROMPT=template["DEFAULT_SYSTEM_PROMPT"],
+            USER_PROMPT=template["USER_PROMPT"],
+            MODEL=model,
+            retrived_docs=fusionrag_cache_list,
+            max_tokens=max_tokens,  ## max tokens.
+            retrived_docs_relevant_docs=[],
+            recompute_tokens=recompute_tokens,
+            recompute_tokens_list=recompute_tokens_list,
+            max_workers=1,  ## max_workers.
+            recomputation_rate=recomputation_rate,
+            model_use=model,
+            endpoint_url=sglang_url,
+            prefiller_endpoint_url=sglang_url_prefiller,
+            method_keyword="",
+        )
+
+        usage_info = {
+            "prompt_tokens": usage["prompt_tokens"],
+            "completion_tokens": usage["completion_tokens"],
+            "total_tokens": usage["total_tokens"],
+        }
+
+        return content, usage_info
+    except Exception as e:
+        print(e)
 
 # ============ Configuration ============
 LOGS_ROOT = "./logs"
@@ -36,9 +112,9 @@ logger = logging.getLogger("vector_baseline")
 
 # Default paths (can be overridden by command line arguments)
 DEFAULT_DATA_PATH = '../../data/locomo10.json'
-DEFAULT_QDRANT_DIR = './qdrant_pre_update' 
+DEFAULT_QDRANT_DIR = './qdrant_post_update_event' ##mengyao_debug here.
 DEFAULT_EMBEDDING_MODEL_PATH = '/path/to/embedding-model'
-DEFAULT_RESULTS_DIR = '../lightmem_locomo_results'
+DEFAULT_RESULTS_DIR = '../lightmem_locomo_results_event'
 DEFAULT_RETRIEVAL_LIMIT = 60
 
 
@@ -190,7 +266,7 @@ def retrieve_summaries(
 
 # ============ Prompt Construction ============
 
-def format_summaries(summaries: List[Dict]) -> str:
+def format_summaries(summaries: List[Dict]) -> (str, list):
     """Format summaries for inclusion in prompt."""
     if not summaries:
         return "No session summaries available."
@@ -201,7 +277,7 @@ def format_summaries(summaries: List[Dict]) -> str:
         summary_text = payload.get('summary', payload.get('memory', ''))
         lines.append(f"{summary_text}")
     
-    return "\n".join(lines)
+    return "\n".join(lines), lines
 
 
 def build_prompt_with_speaker_memories(
@@ -209,7 +285,7 @@ def build_prompt_with_speaker_memories(
     retrieved_entries: List[Dict],
     enable_summary: bool = False,
     summaries: Optional[List[Dict]] = None
-) -> str:
+) -> (str, str, str, list):
     """
     Build prompt with memories organized by speaker.
     
@@ -239,16 +315,19 @@ def build_prompt_with_speaker_memories(
         speaker_2_name = "Speaker 2"
         speaker_1_memories = "No memories available."
         speaker_2_memories = "No memories available."
+        speaker_1_memories_list = []
+        speaker_2_memories_list = []
     elif len(speaker_names) == 1:
         speaker_1_name = speaker_names[0]
         speaker_2_name = "Speaker 2"
-        speaker_1_memories = format_related_memories(speaker_groups[speaker_1_name])
+        speaker_1_memories, speaker_1_memories_list = format_related_memories(speaker_groups[speaker_1_name])
         speaker_2_memories = "No memories available."
+        speaker_2_memories_list = []
     else:
         speaker_1_name = speaker_names[0]
         speaker_2_name = speaker_names[1]
-        speaker_1_memories = format_related_memories(speaker_groups[speaker_1_name])
-        speaker_2_memories = format_related_memories(speaker_groups[speaker_2_name])
+        speaker_1_memories, speaker_1_memories_list = format_related_memories(speaker_groups[speaker_1_name])
+        speaker_2_memories, speaker_2_memories_list = format_related_memories(speaker_groups[speaker_2_name])
         
         logger.debug(
             f"Formatted memories - {speaker_1_name}: {len(speaker_groups[speaker_1_name])}, "
@@ -256,9 +335,11 @@ def build_prompt_with_speaker_memories(
         )
     
     # Choose prompt template based on whether summaries are enabled
+    fusionrag_list = []
+    prefix = f"memory of {speaker_1_name} and {speaker_2_name} are below."
     if enable_summary:
         # Format summaries
-        session_summaries = format_summaries(summaries) if summaries else "No session summaries available."
+        session_summaries, session_summaries_list = format_summaries(summaries) if summaries else "No session summaries available.", []
         
         # Fill StructMem prompt template
         prompt = ANSWER_PROMPT_StructMem.format(
@@ -269,6 +350,9 @@ def build_prompt_with_speaker_memories(
             session_summaries=session_summaries,
             question=question
         )
+        fusionrag_list.extend(speaker_1_memories_list)
+        fusionrag_list.extend(speaker_2_memories_list)
+        fusionrag_list.extend(session_summaries_list)
     else:
         # Fill standard prompt template (no summaries)
         prompt = ANSWER_PROMPT.format(
@@ -278,8 +362,10 @@ def build_prompt_with_speaker_memories(
             speaker_2_memories=speaker_2_memories,
             question=question
         )
+        fusionrag_list.extend(speaker_1_memories_list)
+        fusionrag_list.extend(speaker_2_memories_list)
     
-    return prompt
+    return prompt, ANSWER_PROMPT_PREFIX, prefix, fusionrag_list
 
 
 # ============ Sample Processing ============
@@ -330,6 +416,8 @@ def process_sample(
     logger.info(f"\n{'='*80}")
     logger.info(f"Processing sample: {sample_id}")
     logger.info(f"{'='*80}")
+    if os.getenv("DEBUG", "").lower() == "true":
+        max_qa_workers = 1
 
     # Load memory entries
     try:
@@ -467,7 +555,7 @@ def process_sample(
         logger.info(f"[{sample_id}] Speaker distribution: {speaker_dist}")
 
         # Build prompt
-        user_prompt = build_prompt_with_speaker_memories(
+        user_prompt, system_prompt, prefix, fusionrag_list = build_prompt_with_speaker_memories(
             question,
             retrieved_entries,
             enable_summary=enable_summary,
@@ -482,32 +570,45 @@ def process_sample(
         }
 
         try:
-            response = llm_client.chat.completions.create(
-                model=llm_model,
-                messages=[{"role": "system", "content": user_prompt}],
-                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
-                temperature=0.0,
-                max_tokens=4000
-            )
-
-            generated_answer = response.choices[0].message.content
-
-            # Record token usage
-            if hasattr(response, "usage") and response.usage:
-                token_usage["prompt_tokens"] = response.usage.prompt_tokens
-                token_usage["completion_tokens"] = (
-                    response.usage.completion_tokens
+            if os.getenv("FUSIONRAG").lower() == "true":
+                generated_answer, usage_info = generate_response_with_fusionrag(
+                    system_prompt=system_prompt,
+                    prefix=prefix,
+                    fusionrag_cache_list=fusionrag_list,
+                    query_prompt=question
                 )
-                token_usage["total_tokens"] = response.usage.total_tokens
-
-                logger.info(
-                    f"[{sample_id}] Token usage - Prompt: {token_usage['prompt_tokens']}, "
-                    f"Completion: {token_usage['completion_tokens']}, "
-                    f"Total: {token_usage['total_tokens']}"
+                token_usage["prompt_tokens"] = usage_info["prompt_tokens"]
+                token_usage["completion_tokens"] = usage_info["completion_tokens"]
+                token_usage["total_tokens"] = usage_info["total_tokens"]
+            else:
+                response = llm_client.chat.completions.create(
+                    model=llm_model,
+                    messages=[{"role": "system", "content": user_prompt}],
+                    extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+                    temperature=0.0,
+                    max_tokens=4000
                 )
+
+                generated_answer = response.choices[0].message.content
+
+                # Record token usage
+                if hasattr(response, "usage") and response.usage:
+                    token_usage["prompt_tokens"] = response.usage.prompt_tokens
+                    token_usage["completion_tokens"] = (
+                        response.usage.completion_tokens
+                    )
+                    token_usage["total_tokens"] = response.usage.total_tokens
+
+                    logger.info(
+                        f"[{sample_id}] Token usage - Prompt: {token_usage['prompt_tokens']}, "
+                        f"Completion: {token_usage['completion_tokens']}, "
+                        f"Total: {token_usage['total_tokens']}"
+                    )
 
             logger.info(f"[{sample_id}] Generated: {generated_answer}")
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             logger.error(f"[{sample_id}] Failed to generate answer: {e}")
             generated_answer = ""
 
