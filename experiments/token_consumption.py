@@ -365,14 +365,19 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
 if __name__ == "__main__":
     tasks = [
         (
-            "./token_consumption_build_memory_locomo_event",
-            "./lightmem_locomo_results_event",
+            "./token_consumption_build_memory_locomo_event_fusionrag/",
+            "./lightmem_locomo_results_event_fusionrag",
+            "locomo",
+        ),
+        (
+            "./token_consumption_build_memory_locomo_fusionrag/",
+            "./lightmem_locomo_results_fusionrag",
             "locomo",
         ),
         # (
-        #     "./experiments/token_consumption_build_memory_longmemeval_event",
-        #     "./experiments/lightmem_longmemeval_results_event",
-        #     "longmemeval",
+        #     "./token_consumption_build_memory_locomo_event/",
+        #     "./lightmem_locomo_results_event",
+        #     "locomo",
         # ),
         # (
         #     "./experiments/token_consumption_build_memory_halumem_event",

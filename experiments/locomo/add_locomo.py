@@ -401,6 +401,7 @@ def process_single_sample(sample, api_key, args, TOKEN_CONSUMPTION, QDRANT_PRE_U
             summarize_duration = summarize_end_time - summarize_start_time
             
             summarize_stats = lightmem_for_summary.get_token_statistics()
+            print(f"summarize_stats={summarize_stats}")
             case_summarize_tokens = summarize_stats['llm']['summarize']['total_tokens'] - initial_summarize_tokens
             case_summarize_calls = summarize_stats['llm']['summarize']['calls'] - initial_summarize_calls
             case_summarize_prompt = summarize_stats['llm']['summarize']['prompt_tokens'] - initial_summarize_stats['llm']['summarize']['prompt_tokens']
@@ -446,7 +447,9 @@ def process_single_sample(sample, api_key, args, TOKEN_CONSUMPTION, QDRANT_PRE_U
         case_update_calls = update_end_stats['llm']['update']['calls'] - initial_update_calls
         case_update_prompt = update_end_stats['llm']['update']['prompt_tokens'] - update_start_stats['llm']['update']['prompt_tokens']
         case_update_completion = update_end_stats['llm']['update']['completion_tokens'] - update_start_stats['llm']['update']['completion_tokens']
-        
+        if args.enable_summary:
+            update_end_stats["llm"]["summarize"] = summarize_stats['llm']['summarize']
+
         post_update_count = collection_entry_count(sample_id, QDRANT_POST_UPDATE_DIR_)
         logger.info(f"✓ Update completed: {post_update_count} entries in {update_duration:.2f}s")
         

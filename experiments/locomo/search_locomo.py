@@ -8,18 +8,19 @@ import logging
 from typing import List, Dict, Any, Optional
 import numpy as np
 import argparse
+from add_locomo import extract_locomo_sessions
 
-from experiments.locomo.prompts import ANSWER_PROMPT_PREFIX
 from lightmem.factory.text_embedder.huggingface import TextEmbedderHuggingface
 from lightmem.factory.text_embedder.openai import TextEmbedderOpenAI
 from lightmem.configs.text_embedder.base_config import BaseTextEmbedderConfig
 
-from prompts import ANSWER_PROMPT, ANSWER_PROMPT_StructMem
+from prompts import ANSWER_PROMPT, ANSWER_PROMPT_StructMem, ANSWER_PROMPT_PREFIX
 from retrievers import QdrantEntryLoader, VectorRetriever, format_related_memories
 from llm_judge import evaluate_llm_judge
 from lightmem.fusionrag.run_question import FusionRAGModel
 from lightmem.fusionrag.sglang_kvcache import run_one_question_sglang
 
+all_memory_summarize_percentage=[]
 fusion_rag_model = FusionRAGModel(
             model_path='',
             use_multi_gpu=True,
@@ -67,6 +68,7 @@ def generate_response_with_fusionrag(
     )
 
     try:
+        time_start = time.time()
         content, usage, top_logprobs, real_recomputation_rate = run_one_question_sglang(
             DEFAULT_SYSTEM_PROMPT=template["DEFAULT_SYSTEM_PROMPT"],
             USER_PROMPT=template["USER_PROMPT"],
@@ -83,6 +85,7 @@ def generate_response_with_fusionrag(
             prefiller_endpoint_url=sglang_url_prefiller,
             method_keyword="",
         )
+        print(f"run_one_question_sglang time: {time.time() - time_start}")
 
         usage_info = {
             "prompt_tokens": usage["prompt_tokens"],
@@ -389,7 +392,7 @@ def process_sample(
     retrieval_mode: str,
     enable_summary: bool = False,
     summary_limit: int = 5,
-    max_qa_workers: int = 32,  # 新增 QA 并发数控制参数
+    max_qa_workers: int = 64,  # 新增 QA 并发数控制参数
 ) -> Dict:
     """Process a single sample with all its QA pairs in parallel.
 
@@ -422,6 +425,13 @@ def process_sample(
     # Load memory entries
     try:
         entries = entry_loader.load_entries(sample_id, with_vectors=True)
+        sessions, timestamps, speaker_a, speaker_b = extract_locomo_sessions(sample["conversation"])
+
+        all_history = ""
+        for session in sessions:
+            for turn in session:
+                all_history += turn["content"]
+        all_summary = " ".join([x["payload"]["memory"] for x in entries])
 
         # Load summaries if enabled
         summaries = []
@@ -429,11 +439,18 @@ def process_sample(
             summaries = entry_loader.load_summaries(
                 sample_id, with_vectors=True
             )
+            all_summary += " ".join([x["summary"] for x in summaries])
             logger.info(
                 f"[{sample_id}] Loaded {len(entries)} entries + {len(summaries)} summaries"
             )
         else:
             logger.info(f"[{sample_id}] Loaded {len(entries)} entries")
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained("/mnt/qjhs-sh-lab-01/models/Qwen3-8B", trust_remote_code=True)
+        all_summary = tokenizer.encode(all_summary, add_special_tokens=True)
+        all_history = tokenizer.encode(all_history, add_special_tokens=True)
+        all_memory_summarize_percentage.append(len(all_summary)/len(all_history))
+        print(f"summary percentage {sum(all_memory_summarize_percentage)/len(all_memory_summarize_percentage)}")
 
         if not entries:
             logger.error(f"[{sample_id}] No entries loaded")
@@ -838,6 +855,11 @@ def main():
     total_summaries_used = 0
 
     for sample in tqdm(samples, desc="Processing samples"):
+        sample_file = os.path.join(args.output_dir, f"sample_{sample['sample_id']}.json")
+        if os.path.exists(sample_file):
+            print(f"skipping sample {sample['sample_id']}")
+            continue
+        print(f"result save to {sample_file}")
         sample_result = process_sample(
             sample, entry_loader, retriever,
             llm_client, judge_client,
@@ -847,6 +869,8 @@ def main():
             enable_summary=args.enable_summary,
             summary_limit=args.summary_limit
         )
+        if sample_result is None:
+            continue
 
         all_results.append(sample_result)
 
@@ -870,7 +894,6 @@ def main():
                 total_summaries_used += qa_result['summary_count']
 
         # Save individual sample result
-        sample_file = os.path.join(args.output_dir, f"sample_{sample['sample_id']}.json")
         with open(sample_file, 'w', encoding='utf-8') as f:
             json.dump(sample_result, f, ensure_ascii=False, indent=2)
     
