@@ -125,9 +125,7 @@ logger = logging.getLogger("vector_baseline")
 
 # Default paths (can be overridden by command line arguments)
 DEFAULT_DATA_PATH = '../../data/locomo10.json'
-DEFAULT_QDRANT_DIR = './qdrant_post_update_event' ##mengyao_debug here.
-DEFAULT_EMBEDDING_MODEL_PATH = '/path/to/embedding-model'
-DEFAULT_RESULTS_DIR = '../lightmem_locomo_results_event'
+DEFAULT_EMBEDDING_MODEL_PATH = '/mnt/qjhs-sh-lab-01/models/all-MiniLM-L6-v2/'
 DEFAULT_RETRIEVAL_LIMIT = 60
 
 
@@ -449,7 +447,7 @@ def process_sample(
             summaries = entry_loader.load_summaries(
                 sample_id, with_vectors=True
             )
-            all_summary_text += " ".join([x["summary"] for x in summaries])
+            all_summary_text += " ".join([x["payload"]["summary"] for x in summaries])
             logger.info(
                 f"[{sample_id}] Loaded {len(entries)} entries + {len(summaries)} summaries"
             )
@@ -752,9 +750,9 @@ def main():
     # Data paths
     parser.add_argument('--dataset', type=str, default=DEFAULT_DATA_PATH,
                        help="Path to dataset JSON file")
-    parser.add_argument('--qdrant-dir', type=str, default=DEFAULT_QDRANT_DIR,
+    parser.add_argument('--qdrant-dir', type=str,
                        help="Path to Qdrant data directory")
-    parser.add_argument('--output-dir', type=str, default=DEFAULT_RESULTS_DIR,
+    parser.add_argument('--output-dir', type=str,
                        help="Output directory for results")
     
     # Retrieval configuration
@@ -883,9 +881,9 @@ def main():
 
     for sample in tqdm(samples, desc="Processing samples"):
         sample_file = os.path.join(args.output_dir, f"sample_{sample['sample_id']}.json")
-        if os.path.exists(sample_file):
-            print(f"skipping sample {sample['sample_id']} sample_file={sample_file}")
-            continue
+        # if os.path.exists(sample_file):
+        #     print(f"skipping sample {sample['sample_id']} sample_file={sample_file}")
+        #     continue
         print(f"result save to {sample_file}")
         sample_result = process_sample(
             sample, entry_loader, retriever,

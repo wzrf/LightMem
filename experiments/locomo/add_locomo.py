@@ -36,7 +36,7 @@ DATASET_TYPE = 'locomo'
 # Qdrant Storage Directories
 
 # Parallel Processing Configuration
-USE_PROCESS_POOL = True
+USE_PROCESS_POOL = False
 
 # ============ Arguments ============
 def parse_args():
@@ -142,7 +142,11 @@ def extract_locomo_sessions(conversation_dict):
     return sessions, timestamps, speaker_a, speaker_b
 
 
-def load_lightmem(collection_name, api_key, args, base_dir):
+def load_lightmem(collection_name, api_key, args, base_dir, compressor, embedder):
+    if "kimi" in LLM_MODEL.lower() or "deepseek" in LLM_MODEL.lower():
+        device_ = "cpu"
+    else:
+        device_ = "cuda"
     config = {
         "pre_compress": True,
         "pre_compressor": {
@@ -150,7 +154,7 @@ def load_lightmem(collection_name, api_key, args, base_dir):
             "configs": {
                 "llmlingua_config": {
                     "model_name": LLMLINGUA_MODEL_PATH,
-                    "device_map": "cpu",
+                    "device_map": device_,
                     "use_llmlingua2": True,
                 },
                 "compress_config": {
@@ -184,25 +188,25 @@ def load_lightmem(collection_name, api_key, args, base_dir):
             "configs": {
                 "model": EMBEDDING_MODEL_PATH,
                 "embedding_dims": 384,
-                "model_kwargs": {"device": "cpu"}, ##mengyao_debug: fix this
+                "model_kwargs": {"device": device_}, ##mengyao_debug: fix this
             },
         },
         "retrieve_strategy": "embedding",
         "embedding_retriever": {
             "model_name": "qdrant",
-            "configs": { 
+            "configs": {
                 "collection_name": collection_name,
                 "embedding_model_dims": 384,
-                "path": f'{base_dir}/{collection_name}',  
+                "path": f'{base_dir}/{collection_name}',
                 "on_disk": True,
             },
         },
-        "summary_retriever": { 
+        "summary_retriever": {
             "model_name": "qdrant",
             "configs": {
                 "collection_name": f"{collection_name}_summary",
                 "embedding_model_dims": 384,
-                "path": f'{base_dir}/{collection_name}_summary',  
+                "path": f'{base_dir}/{collection_name}_summary',
                 "on_disk": True,
             }
         },
@@ -215,7 +219,7 @@ def load_lightmem(collection_name, api_key, args, base_dir):
         "extraction_mode": args.extraction_mode
     }
     
-    lightmem = LightMemory.from_config(config)
+    lightmem = LightMemory.from_config_with_compressor_embedder(config, compressor, embedder)
     return lightmem
 
 
@@ -271,7 +275,7 @@ def collection_entry_count(collection_name, base_dir):
 
 # ============ Core Processing Function ============
 
-def process_single_sample(sample, api_key, args, TOKEN_CONSUMPTION, QDRANT_PRE_UPDATE_DIR_, QDRANT_POST_UPDATE_DIR_):
+def process_single_sample(sample, api_key, args, TOKEN_CONSUMPTION, QDRANT_PRE_UPDATE_DIR_, QDRANT_POST_UPDATE_DIR_, compressor, embedder):
     sample_id = sample['sample_id']
     logger = get_process_logger(sample_id)
     if args.extraction_mode == "event":
@@ -296,7 +300,7 @@ def process_single_sample(sample, api_key, args, TOKEN_CONSUMPTION, QDRANT_PRE_U
         logger.info("Phase 1: Building memory (add_memory)")
         logger.info(f"{'─'*70}")
         
-        lightmem = load_lightmem(collection_name=sample_id, api_key=api_key, args=args, base_dir=QDRANT_POST_UPDATE_DIR_)
+        lightmem = load_lightmem(collection_name=sample_id, api_key=api_key, args=args, base_dir=QDRANT_POST_UPDATE_DIR_, compressor=compressor, embedder=embedder)
 
         initial_stats = lightmem.get_token_statistics()
         case_start_time = time.time()
@@ -380,13 +384,14 @@ def process_single_sample(sample, api_key, args, TOKEN_CONSUMPTION, QDRANT_PRE_U
             initial_summarize_tokens = initial_summarize_stats['llm']['summarize']['total_tokens']
             initial_summarize_calls = initial_summarize_stats['llm']['summarize']['calls']
             
-            logger.info(f"  Creating LightMemory instance for summarization (using pre_update)")
-            lightmem_for_summary = load_lightmem(
-                collection_name=sample_id, 
-                api_key=api_key,
-                args=args,
-                base_dir=QDRANT_PRE_UPDATE_DIR_
-            )
+            logger.info(f"  Creating LightMemory instance for summarization (using post_update)")
+            # lightmem_for_summary = load_lightmem(
+            #     collection_name=sample_id,
+            #     api_key=api_key,
+            #     args=args,
+            #     base_dir=QDRANT_POST_UPDATE_DIR_
+            # )
+            lightmem_for_summary = lightmem
             
             summary_result = lightmem_for_summary.summarize(
                 retrieval_scope="global",  
@@ -527,6 +532,44 @@ def process_single_sample(sample, api_key, args, TOKEN_CONSUMPTION, QDRANT_PRE_U
         }
 
 
+def load_compressor_and_embedder():
+    from lightmem.configs.text_embedder.base import TextEmbedderConfig
+    from lightmem.configs.pre_compressor.base import PreCompressorConfig
+    from lightmem.factory.pre_compressor.factory import PreCompressorFactory
+    from lightmem.factory.text_embedder.factory import TextEmbedderFactory
+    embedder_config = {
+            "model_name": "huggingface",
+            "configs": {
+                "model": EMBEDDING_MODEL_PATH,
+                "embedding_dims": 384,
+                "model_kwargs": {"device": "cuda:2"},
+            },
+        }
+    compressor_config = {
+            "model_name": "llmlingua-2",
+            "configs": {
+                "llmlingua_config": {
+                    "model_name": LLMLINGUA_MODEL_PATH,
+                    "device_map": "cuda:3",
+                    "use_llmlingua2": True,
+                },
+                "compress_config": {
+                    "instruction": "",
+                    "rate": 0.6,
+                    "target_token": -1
+                },
+            }
+        }
+
+    compressor = PreCompressorFactory.from_config(
+        PreCompressorConfig(**compressor_config)
+    )
+    embedder = TextEmbedderFactory.from_config(
+        TextEmbedderConfig(**embedder_config)
+    )
+    return compressor, embedder
+
+
 # ============ Main Execution ============
 
 def main():
@@ -589,6 +632,8 @@ def main():
     main_logger.info("\n" + "=" * 70)
     main_logger.info("Scanning existing collections...")
     main_logger.info("=" * 70)
+
+    compressor, embedder = load_compressor_and_embedder()
     
     missing = []
     for sample in data:
@@ -657,7 +702,7 @@ def main():
             api_key_idx = idx % len(API_KEYS)
             api_key = API_KEYS[api_key_idx]
             
-            future = executor.submit(process_single_sample, sample, api_key, args, TOKEN_CONSUMPTION, QDRANT_PRE_UPDATE_DIR, QDRANT_POST_UPDATE_DIR)
+            future = executor.submit(process_single_sample, sample, api_key, args, TOKEN_CONSUMPTION, QDRANT_PRE_UPDATE_DIR, QDRANT_POST_UPDATE_DIR, compressor, embedder)
             future_to_sample[future] = sample
         
         # Process results as they complete
@@ -720,7 +765,7 @@ def main():
     main_logger.info("=" * 70)
 
 
-# LLM_MODEL = 'qwen3-8b' ## change this
+# LLM_MODEL = 'qwen3-8b' ## mengyao_debug change this
 LLM_MODEL = 'Kimi-K2.6' ## change this
 API_BASE_URL = 'http://127.0.0.1:30004/v1'
 

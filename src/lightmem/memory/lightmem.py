@@ -106,7 +106,7 @@ class MessageNormalizer:
 
 
 class LightMemory:
-    def __init__(self, config: BaseMemoryConfigs = BaseMemoryConfigs()):
+    def __init__(self, config: BaseMemoryConfigs = BaseMemoryConfigs(), compressor=None, embedder=None):
         
         """
         Initialize a LightMemory instance.
@@ -167,8 +167,11 @@ class LightMemory:
         
         self.config = config
         if self.config.pre_compress:
-            self.logger.info("Initializing pre-compressor")
-            self.compressor = PreCompressorFactory.from_config(self.config.pre_compressor)
+            if compressor is None:
+                self.logger.info("Initializing pre-compressor")
+                self.compressor = PreCompressorFactory.from_config(self.config.pre_compressor)
+            else:
+                self.compressor = compressor
         if self.config.topic_segment:
             self.logger.info("Initializing topic segmenter")
             self.segmenter = TopicSegmenterFactory.from_config(self.config.topic_segmenter, self.config.precomp_topic_shared, self.compressor)
@@ -178,7 +181,10 @@ class LightMemory:
         self.shortmem_buffer_manager = ShortMemBufferManager(max_tokens = 512, tokenizer=getattr(self.manager, "tokenizer", self.manager.config.model))
         if self.config.index_strategy == 'embedding' or self.config.index_strategy == 'hybrid':
             self.logger.info("Initializing text embedder")
-            self.text_embedder = TextEmbedderFactory.from_config(self.config.text_embedder)
+            if embedder is None:
+                self.text_embedder = TextEmbedderFactory.from_config(self.config.text_embedder)
+            else:
+                self.text_embedder = embedder
         # if self.config.multimodal_embedder:
         self.retrieve_strategy = self.config.retrieve_strategy
         if self.retrieve_strategy in ["context", "hybrid"]:
@@ -204,6 +210,15 @@ class LightMemory:
             print(f"Configuration validation error: {e}")
             raise
         return cls(configs)
+
+    @classmethod
+    def from_config_with_compressor_embedder(cls, config: Dict[str,Any], compressor=None, embedder=None):
+        try:
+            configs = BaseMemoryConfigs(**config)
+        except ValidationError as e:
+            print(f"Configuration validation error: {e}")
+            raise
+        return cls(configs, compressor, embedder)
     
     
     def add_memory(

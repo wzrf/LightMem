@@ -1,7 +1,9 @@
 from typing import Dict, Optional, List, Union, Any
 from transformers import PreTrainedTokenizerBase
+import threading
 
 from lightmem.configs.pre_compressor.llmlingua_2 import LlmLingua2Config
+compressor_lock = threading.Lock()
 
 
 class LlmLingua2Compressor:
@@ -51,42 +53,43 @@ class LlmLingua2Compressor:
         Returns:
             List of messages with compressed content.
         """
-        for mes in messages:
-            content = mes.get('content', '')
-            if not content or not content.strip():
-                # If content is empty, it doesn't need compression
-                continue
+        with compressor_lock:
+            for mes in messages:
+                content = mes.get('content', '')
+                if not content or not content.strip():
+                    # If content is empty, it doesn't need compression
+                    continue
 
-            compress_config = {
-                'context': [content],
-                **self.config.compress_config
-            }
+                compress_config = {
+                    'context': [content],
+                    **self.config.compress_config
+                }
 
-            try:
-                comp_content = self._compressor.compress_prompt(**compress_config)['compressed_prompt']
-            except Exception as e:
-                print(f"compress error, skip this message: {e}")
-                comp_content = content  # Keep the original content if compression fails
-
-            # Check if the compressed content is still too long
-            if tokenizer is not None:
                 try:
-                    while len(tokenizer.encode(comp_content)) >= 512 and comp_content.strip():
-                        new_compress_config = {
-                            'context': comp_content,
-                            **self.config.compress_config
-                        }
-                        comp_content = self._compressor.compress_prompt(**new_compress_config)['compressed_prompt']
+                    comp_content = self._compressor.compress_prompt(**compress_config)['compressed_prompt']
                 except Exception as e:
-                    print(f"secondary compress error: {e}")
-                    # If an error occurs, exit the loop and keep the current compression result
-                    break
+                    print(f"compress error, skip this message: {e}")
+                    comp_content = content  # Keep the original content if compression fails
 
-            # Update message
-            if comp_content.strip():
-                mes['content'] = comp_content.strip()
+                # Check if the compressed content is still too long
+                if tokenizer is not None:
+                    try:
+                        while len(tokenizer.encode(comp_content)) >= 512 and comp_content.strip():
+                            new_compress_config = {
+                                'context': comp_content,
+                                **self.config.compress_config
+                            }
+                            comp_content = self._compressor.compress_prompt(**new_compress_config)['compressed_prompt']
+                    except Exception as e:
+                        print(f"secondary compress error: {e}")
+                        # If an error occurs, exit the loop and keep the current compression result
+                        break
 
-        return messages
+                # Update message
+                if comp_content.strip():
+                    mes['content'] = comp_content.strip()
+
+            return messages
 
     @property
     def inner_compressor(self):

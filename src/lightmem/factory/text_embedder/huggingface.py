@@ -3,6 +3,9 @@ from typing import Optional, Literal
 from sentence_transformers import SentenceTransformer
 import numpy as np
 from lightmem.configs.text_embedder.base_config import BaseTextEmbedderConfig
+import threading
+
+embedder_lock = threading.Lock()
 
 class TextEmbedderHuggingface:
     def __init__(self, config: Optional[BaseTextEmbedderConfig] = None):
@@ -43,17 +46,18 @@ class TextEmbedderHuggingface:
         Returns:
             list: The embedding vector.
         """
-        self.total_calls += 1
-        if self.config.huggingface_base_url:
-            response = self.client.embeddings.create(input=text, model="tei")
-            self.total_tokens += getattr(response.usage, 'total_tokens', 0)
-            return response.data[0].embedding
-        else:
-            result = self.model.encode(text, convert_to_numpy=True)
-            if isinstance(result, np.ndarray):
-                return result.tolist()
+        with embedder_lock:
+            self.total_calls += 1
+            if self.config.huggingface_base_url:
+                response = self.client.embeddings.create(input=text, model="tei")
+                self.total_tokens += getattr(response.usage, 'total_tokens', 0)
+                return response.data[0].embedding
             else:
-                return result
+                result = self.model.encode(text, convert_to_numpy=True)
+                if isinstance(result, np.ndarray):
+                    return result.tolist()
+                else:
+                    return result
             
     def get_stats(self):
         return {

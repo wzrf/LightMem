@@ -80,6 +80,9 @@ def parse_locomo_results(data):
         pred = item.get("prediction", "")
         ref = item.get("reference", "")
 
+        if pred.startswith("Answer: "):
+            pred = pred[len("Answer: ") :]
+
         judge_score = None
         if "metrics" in item and "judge_correct" in item["metrics"]:
             judge_score = float(item["metrics"]["judge_correct"])
@@ -364,26 +367,43 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
 
 if __name__ == "__main__":
     tasks = [
-        (
-            "./token_consumption_build_memory_locomo_event_fusionrag/",
-            "./lightmem_locomo_results_event_fusionrag",
-            "locomo",
-        ),
-        (
-            "./token_consumption_build_memory_locomo_fusionrag/",
-            "./lightmem_locomo_results_fusionrag",
-            "locomo",
-        ),
+        # (
+        #     "./token_consumption_build_memory_locomo_event_fusionrag/",
+        #     "./lightmem_locomo_results_event_fusionrag",
+        #     "locomo",
+        # ),
+        # (
+        #     "./token_consumption_build_memory_locomo_fusionrag/",
+        #     "./lightmem_locomo_results_fusionrag",
+        #     "locomo",
+        # ),
+
+        # (
+        #     "./token_consumption_build_memory_locomo/",
+        #     "./lightmem_locomo_results",
+        #     "locomo",
+        # ),
+        #
         # (
         #     "./token_consumption_build_memory_locomo_event/",
         #     "./lightmem_locomo_results_event",
         #     "locomo",
         # ),
         # (
-        #     "./experiments/token_consumption_build_memory_halumem_event",
-        #     "./experiments/lightmem_halumem_results_event",
+        #     "./token_consumption_build_memory_halumem_event",
+        #     "./lightmem_halumem_results",
         #     "halumem",
         # ),
+        (
+            "./token_consumption_build_memory_lopngmemeval_event",
+            "./lightmem_longmemeval_results_event",
+            "longmemeval",
+        ),
+        (
+            "./token_consumption_build_memory_lopngmemeval",
+            "./lightmem_longmemeval_results",
+            "longmemeval",
+        ),
     ]
 
     for token_path, result_path, name in tasks:
