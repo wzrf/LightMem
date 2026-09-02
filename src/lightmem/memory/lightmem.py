@@ -160,6 +160,8 @@ class LightMemory:
             "summarize_total_tokens": 0,
             "embedding_calls": 0,
             "embedding_total_tokens": 0,
+            "summarize_origin_text_tokens": 0,
+            "summarize_summarize_tokens": 0,
         }
         self.logger.info("Token statistics tracking initialized")
         
@@ -746,10 +748,12 @@ class LightMemory:
                 "straight_use_tokens": self.token_stats["straight_use_tokens"],
                 "reuse_history_tokens": self.token_stats["reuse_history_tokens"],
                 "summarize": {
-                "calls": self.token_stats["summarize_calls"],
-                "prompt_tokens": self.token_stats["summarize_prompt_tokens"],
-                "completion_tokens": self.token_stats["summarize_completion_tokens"],
-                "total_tokens": self.token_stats["summarize_total_tokens"],
+                    "calls": self.token_stats["summarize_calls"],
+                    "prompt_tokens": self.token_stats["summarize_prompt_tokens"],
+                    "completion_tokens": self.token_stats["summarize_completion_tokens"],
+                    "total_tokens": self.token_stats["summarize_total_tokens"],
+                    "summarize_origin_text_tokens": self.token_stats["summarize_origin_text_tokens"],
+                    "summarize_summarize_tokens": self.token_stats["summarize_summarize_tokens"],
                 },
             },
             "embedding": {
@@ -872,6 +876,10 @@ class LightMemory:
                     logger=self.logger
                 )
             self.logger.debug(f"[{call_id}] Generated {len(summary_text)} chars")
+            if "</think>" in summary_text:
+                summary_text=summary_text.split("</think>")[1]
+            self.token_stats["summarize_origin_text_tokens"] += len(buffer_text) + len(supplementary_text)
+            self.token_stats["summarize_summarize_tokens"] += len(summary_text)
             summary_id = store_summary(
                 summary_text=summary_text,
                 buffer_entries=Cbuf,

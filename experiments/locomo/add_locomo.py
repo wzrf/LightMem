@@ -24,8 +24,6 @@ os.makedirs(RUN_LOG_DIR, exist_ok=True)
 API_KEYS = [
     'sk-dummy'
 ]
-API_BASE_URL = 'http://127.0.0.1:30004/v1'
-LLM_MODEL = 'qwen3-8b'
 
 # Model Paths
 LLMLINGUA_MODEL_PATH='/mnt/qjhs-sh-lab-01/models/llmlingua-2-bert-base-multilingual-cased-meetingbank'
@@ -152,7 +150,7 @@ def load_lightmem(collection_name, api_key, args, base_dir):
             "configs": {
                 "llmlingua_config": {
                     "model_name": LLMLINGUA_MODEL_PATH,
-                    "device_map": "cuda",
+                    "device_map": "cpu",
                     "use_llmlingua2": True,
                 },
                 "compress_config": {
@@ -186,7 +184,7 @@ def load_lightmem(collection_name, api_key, args, base_dir):
             "configs": {
                 "model": EMBEDDING_MODEL_PATH,
                 "embedding_dims": 384,
-                "model_kwargs": {"device": "cuda"},
+                "model_kwargs": {"device": "cpu"}, ##mengyao_debug: fix this
             },
         },
         "retrieve_strategy": "embedding",
@@ -548,6 +546,12 @@ def main():
         QDRANT_POST_UPDATE_DIR = f"{QDRANT_POST_UPDATE_DIR}_fusionrag"
         TOKEN_CONSUMPTION = f"{TOKEN_CONSUMPTION}_fusionrag"
 
+    if LLM_MODEL.lower() != "qwen3-8b":
+        QDRANT_PRE_UPDATE_DIR = f"{QDRANT_PRE_UPDATE_DIR}_{LLM_MODEL}"
+        QDRANT_POST_UPDATE_DIR = f"{QDRANT_POST_UPDATE_DIR}_{LLM_MODEL}"
+        TOKEN_CONSUMPTION = f"{TOKEN_CONSUMPTION}_{LLM_MODEL}"
+
+
     print(f"QDRANT_PRE_UPDATE_DIR={QDRANT_PRE_UPDATE_DIR}")
 
     os.makedirs(QDRANT_PRE_UPDATE_DIR, exist_ok=True)
@@ -715,6 +719,10 @@ def main():
     main_logger.info(f"Logs:        {RUN_LOG_DIR}")
     main_logger.info("=" * 70)
 
+
+# LLM_MODEL = 'qwen3-8b' ## change this
+LLM_MODEL = 'Kimi-K2.6' ## change this
+API_BASE_URL = 'http://127.0.0.1:30004/v1'
 
 if __name__ == "__main__":
     MAX_WORKERS = 16

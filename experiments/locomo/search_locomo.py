@@ -21,6 +21,7 @@ from lightmem.fusionrag.run_question import FusionRAGModel
 from lightmem.fusionrag.sglang_kvcache import run_one_question_sglang
 
 all_memory_summarize_percentage=[]
+all_answer_time = []
 fusion_rag_model = FusionRAGModel(
             model_path='',
             use_multi_gpu=True,
@@ -47,11 +48,19 @@ def generate_response_with_fusionrag(
         sglang_url="http://127.0.0.1:30003/v1/completions",
         sglang_url_prefiller="http://127.0.0.1:30003/v1/completions"
 ) -> Optional[str]:
-    template = {
-        "DEFAULT_SYSTEM_PROMPT": f"""<|im_start|>system\n{system_prompt}\n{prefix}""",
-        "USER_PROMPT": f"""<|im_end|>\n<|im_start|>user\n\nQuestion: /no_think {query_prompt}<|im_end|>\n<|im_start|>assistant\nAnswer: </think>"""
-    }
 
+    if "kimi" in model.lower():
+        template = {
+            "DEFAULT_SYSTEM_PROMPT": f"""<|im_system|>system<|im_middle|>\n{system_prompt}\n{prefix}""",
+            "USER_PROMPT": f"""<|im_end|><|im_user|>user<|im_middle|>{query_prompt}<|im_end|><|im_assistant|>assistant<|im_middle|><think></think> Answer:"""
+        }
+    else: ## default: qwen
+        template = {
+            "DEFAULT_SYSTEM_PROMPT": f"""<|im_start|>system\n{system_prompt}\n{prefix}""",
+            "USER_PROMPT": f"""<|im_end|>\n<|im_start|>user\n\nQuestion: /no_think {query_prompt}<|im_end|>\n<|im_start|>assistant\nAnswer: </think>"""
+        }
+
+    time_start = time.time()
     recompute_tokens, recompute_tokens_list, retrieved_docs, recompute_rate, sorted_doc_index, sorted_doc_index_before, _ = fusion_rag_model.draft_one_question(
         template["DEFAULT_SYSTEM_PROMPT"],  ## DEFAULT_SYSTEM_PROMPT
         fusionrag_cache_list,
@@ -66,6 +75,7 @@ def generate_response_with_fusionrag(
         False,
         True
     )
+    print(f"draft_one_question time = {time.time() - time_start}")
 
     try:
         time_start = time.time()
@@ -419,7 +429,7 @@ def process_sample(
     logger.info(f"\n{'='*80}")
     logger.info(f"Processing sample: {sample_id}")
     logger.info(f"{'='*80}")
-    if os.getenv("DEBUG", "").lower() == "true":
+    if os.getenv("DEBUG", "").lower() == "true" or os.getenv("DEBUG", "").lower() == "1":
         max_qa_workers = 1
 
     # Load memory entries
@@ -431,7 +441,7 @@ def process_sample(
         for session in sessions:
             for turn in session:
                 all_history += turn["content"]
-        all_summary = " ".join([x["payload"]["memory"] for x in entries])
+        all_summary_text = " ".join([x["payload"]["memory"] +" "+ x["payload"]["original_memory"] +" "+ x["payload"]["compressed_memory"] for x in entries])
 
         # Load summaries if enabled
         summaries = []
@@ -439,7 +449,7 @@ def process_sample(
             summaries = entry_loader.load_summaries(
                 sample_id, with_vectors=True
             )
-            all_summary += " ".join([x["summary"] for x in summaries])
+            all_summary_text += " ".join([x["summary"] for x in summaries])
             logger.info(
                 f"[{sample_id}] Loaded {len(entries)} entries + {len(summaries)} summaries"
             )
@@ -447,10 +457,12 @@ def process_sample(
             logger.info(f"[{sample_id}] Loaded {len(entries)} entries")
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained("/mnt/qjhs-sh-lab-01/models/Qwen3-8B", trust_remote_code=True)
-        all_summary = tokenizer.encode(all_summary, add_special_tokens=True)
+        all_summary = tokenizer.encode(all_summary_text, add_special_tokens=True)
         all_history = tokenizer.encode(all_history, add_special_tokens=True)
         all_memory_summarize_percentage.append(len(all_summary)/len(all_history))
         print(f"summary percentage {sum(all_memory_summarize_percentage)/len(all_memory_summarize_percentage)}")
+
+        # return None ##mengyao_debug
 
         if not entries:
             logger.error(f"[{sample_id}] No entries loaded")
@@ -585,14 +597,20 @@ def process_sample(
             "completion_tokens": 0,
             "total_tokens": 0,
         }
-
+        answer_time = 0
         try:
-            if os.getenv("FUSIONRAG").lower() == "true":
+            time_start = time.time()
+            ## mengyao_debug
+            #mengyao_debug 1. 修改template
+            #mengyao_debug 2. 修改ip:port/v1/completion
+            #mengyao_debug 3. 修改 chat_template_kwargs
+            if os.getenv("FUSIONRAG", "").lower() == "true":
                 generated_answer, usage_info = generate_response_with_fusionrag(
                     system_prompt=system_prompt,
                     prefix=prefix,
                     fusionrag_cache_list=fusionrag_list,
-                    query_prompt=question
+                    query_prompt=question,
+                    model="Kimi-k2.6"  ## mengyao_debug qwen or kimi-k2.6
                 )
                 token_usage["prompt_tokens"] = usage_info["prompt_tokens"]
                 token_usage["completion_tokens"] = usage_info["completion_tokens"]
@@ -601,7 +619,8 @@ def process_sample(
                 response = llm_client.chat.completions.create(
                     model=llm_model,
                     messages=[{"role": "system", "content": user_prompt}],
-                    extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+                    # extra_body={"chat_template_kwargs": {"enable_thinking": False}}, ## mengyao_debug qwen
+                    extra_body={"chat_template_kwargs": {"thinking": False, "enable_thinking": False}}, ## mengyao_debug this is for kimi-2.6
                     temperature=0.0,
                     max_tokens=4000
                 )
@@ -621,6 +640,7 @@ def process_sample(
                         f"Completion: {token_usage['completion_tokens']}, "
                         f"Total: {token_usage['total_tokens']}"
                     )
+            answer_time = time.time() - time_start
 
             logger.info(f"[{sample_id}] Generated: {generated_answer}")
         except Exception as e:
@@ -650,6 +670,8 @@ def process_sample(
             metrics = {"judge_correct": 0, "judge_response": ""}
 
         # Store results
+        all_answer_time.append(answer_time)
+        print(f"average qa answer time = {sum(all_answer_time) / len(all_answer_time)}")
         result_dict = {
             "question": question,
             "prediction": generated_answer,
@@ -660,6 +682,7 @@ def process_sample(
             "retrieval_time": retrieval_time,
             "metrics": metrics,
             "token_usage": token_usage,
+            "answer_time": answer_time,
         }
 
         if enable_summary:
@@ -854,10 +877,14 @@ def main():
     category_counts = {1: 0, 2: 0, 3: 0, 4: 0}
     total_summaries_used = 0
 
+    if os.getenv("DEBUG", "").lower() == "true":
+        samples = samples[:1]
+        samples[0]['qa'] = samples[0]['qa'][:10]
+
     for sample in tqdm(samples, desc="Processing samples"):
         sample_file = os.path.join(args.output_dir, f"sample_{sample['sample_id']}.json")
         if os.path.exists(sample_file):
-            print(f"skipping sample {sample['sample_id']}")
+            print(f"skipping sample {sample['sample_id']} sample_file={sample_file}")
             continue
         print(f"result save to {sample_file}")
         sample_result = process_sample(

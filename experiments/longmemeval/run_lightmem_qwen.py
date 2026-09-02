@@ -16,8 +16,6 @@ JUDGE_MODEL_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 JUDGE_MODEL = 'deepseek-v3.2'
 
 API_KEY = 'sk-dummy'
-API_BASE_URL = 'http://127.0.0.1:30004/v1'
-LLM_MODEL = 'qwen3-8b'
 
 # ============ Model Paths ============
 LLMLINGUA_MODEL_PATH = '/mnt/qjhs-sh-lab-01/models/llmlingua-2-bert-base-multilingual-cased-meetingbank'
@@ -91,7 +89,10 @@ class LLMModel:
                     top_p=self.top_p,
                     stream=False,
                     extra_body={  # 关键配置
-                        "chat_template_kwargs": {"enable_thinking": False}
+                        "chat_template_kwargs": {
+                            "enable_thinking": False,
+                            "thinking": False
+                        }
                     },
                 )
                 response = completion.choices[0].message.content
@@ -115,7 +116,10 @@ class LLMModel:
                     top_p=self.top_p,
                     stream=False,
                     extra_body={  # 关键配置
-                        "chat_template_kwargs": {"enable_thinking": False}
+                        "chat_template_kwargs": {
+                            "enable_thinking": False,
+                            "thinking": False
+                        }
                     },
                 )
                 response = completion.choices[0].message.content
@@ -333,6 +337,10 @@ def main():
 
 if __name__ == "__main__":
 
+    API_BASE_URL = 'http://127.0.0.1:30004/v1'
+    # LLM_MODEL = 'qwen3-8b'
+    LLM_MODEL = 'deepseek-v3.2' ## mengyao_debug change this.
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--extraction_mode', type=str, default='flat',
                        choices=['flat', 'event'],
@@ -349,6 +357,9 @@ if __name__ == "__main__":
 
     if os.getenv("FUSIONRAG", "").lower() == "true":
         post_tag += "_fusionrag"
+
+    if LLM_MODEL != "qwen3-8b":
+        post_tag += f"_{LLM_MODEL}"
 
     MAX_WORKERS = 16
     if os.environ.get('DEBUG') == "1":

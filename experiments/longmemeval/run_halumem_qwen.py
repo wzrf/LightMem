@@ -134,7 +134,10 @@ class LLMModel:
                     top_p=self.top_p,
                     stream=False,
                     extra_body={
-                        "chat_template_kwargs": {"enable_thinking": False}
+                        "chat_template_kwargs": {
+                            "enable_thinking": False,
+                            "thinking": False
+                        }
                     },
                 )
                 response = completion.choices[0].message.content

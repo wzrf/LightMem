@@ -203,15 +203,20 @@ class OpenaiManager:
 
             params.update(**openrouter_params)
 
-        if response_format:
-            params["response_format"] = response_format
+        ##mengyao_debug for sglang
+        # if response_format:
+        #     params["response_format"] = response_format
         if tools:  # TODO: Remove tools if no issues found with new memory addition logic
             params["tools"] = tools
             params["tool_choice"] = tool_choice
 
         ##mengyao_debug
         params["extra_body"] = {
-            "enable_thinking": False
+            "chat_template_kwargs":
+                {
+                    "thinking": False,
+                    "enable_thinking": False
+                }
         }
 
         response = self.client.chat.completions.create(**params)
