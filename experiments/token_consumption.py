@@ -379,10 +379,15 @@ if __name__ == "__main__":
         # ),
 
         # (
-        #     "./token_consumption_build_memory_locomo/",
-        #     "./lightmem_locomo_results",
+        #     "./token_consumption_build_memory_locomo_Kimi-K2.6",
+        #     "./lightmem_locomo_results_Kimi-K2.6",
         #     "locomo",
         # ),
+        (
+            "./token_consumption_build_memory_locomo_event_Kimi-K2.6",
+            "./lightmem_locomo_results_event_Kimi-K2.6",
+            "locomo",
+        ),
         #
         # (
         #     "./token_consumption_build_memory_locomo_event/",
@@ -394,16 +399,16 @@ if __name__ == "__main__":
         #     "./lightmem_halumem_results",
         #     "halumem",
         # ),
-        (
-            "./token_consumption_build_memory_lopngmemeval_event",
-            "./lightmem_longmemeval_results_event",
-            "longmemeval",
-        ),
-        (
-            "./token_consumption_build_memory_lopngmemeval",
-            "./lightmem_longmemeval_results",
-            "longmemeval",
-        ),
+        # (
+        #     "./token_consumption_build_memory_lopngmemeval_event",
+        #     "./lightmem_longmemeval_results_event",
+        #     "longmemeval",
+        # ),
+        # (
+        #     "./token_consumption_build_memory_lopngmemeval",
+        #     "./lightmem_longmemeval_results",
+        #     "longmemeval",
+        # ),
     ]
 
     for token_path, result_path, name in tasks:

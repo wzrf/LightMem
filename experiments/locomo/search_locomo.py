@@ -400,7 +400,8 @@ def process_sample(
     retrieval_mode: str,
     enable_summary: bool = False,
     summary_limit: int = 5,
-    max_qa_workers: int = 64,  # 新增 QA 并发数控制参数
+    max_qa_workers: int = 16,  # 新增 QA 并发数控制参数
+    output_file: Optional[str] = None,
 ) -> Dict:
     """Process a single sample with all its QA pairs in parallel.
 
@@ -419,6 +420,7 @@ def process_sample(
         enable_summary: Whether to retrieve and use summaries
         summary_limit: Retrieval limit for summaries
         max_qa_workers: Number of concurrent workers for QA processing
+        output_file: Optional path to save incremental results. If provided, will skip already processed QA pairs.
 
     Returns:
         Dictionary with sample results and statistics
@@ -490,24 +492,61 @@ def process_sample(
         }
 
     # 1. 抽取并过滤有效的 QA 任务列表
-    valid_qa_tasks = []
+    all_valid_qa_tasks = []
     for qa_idx, qa in enumerate(sample["qa"]):
         category = qa["category"]
         if int(category) == 5 or category not in allow_categories:
             continue
-        valid_qa_tasks.append((qa_idx, qa))
+        all_valid_qa_tasks.append((qa_idx, qa))
+
+    # 如果提供了输出文件，加载现有结果并跳过已处理的 QA
+    existing_results = []
+    processed_qa_indices = set()
+    loaded_existing_data = None
+    if output_file and os.path.exists(output_file):
+        try:
+            with open(output_file, 'r', encoding='utf-8') as f:
+                loaded_existing_data = json.load(f)
+                existing_results = loaded_existing_data.get('results', [])
+                # 提取已处理的 qa_idx
+                for res in existing_results:
+                    if 'qa_idx' in res:
+                        processed_qa_indices.add(res['qa_idx'])
+                logger.info(f"[{sample_id}] Loaded {len(existing_results)} existing results, skipping {len(processed_qa_indices)} QA pairs")
+        except Exception as e:
+            logger.warning(f"[{sample_id}] Failed to load existing results: {e}")
+
+    # 过滤掉已处理的 QA
+    valid_qa_tasks = []
+    for qa_idx, qa in all_valid_qa_tasks:
+        if qa_idx not in processed_qa_indices:
+            valid_qa_tasks.append((qa_idx, qa))
+        else:
+            logger.info(f"[{sample_id}] Skipping already processed QA idx {qa_idx}")
 
     if not valid_qa_tasks:
+        logger.info(f"[{sample_id}] All QA pairs already processed, returning existing results")
+        # 返回现有结果，保持原有 token_stats（如果需要可以合并）
+        token_stats_default = {
+            "total_prompt_tokens": 0,
+            "total_completion_tokens": 0,
+            "total_tokens": 0,
+            "api_calls": 0,
+        }
+        if loaded_existing_data and 'token_stats' in loaded_existing_data:
+            token_stats = loaded_existing_data['token_stats']
+        else:
+            token_stats = token_stats_default.copy()
         return {
             "sample_id": sample_id,
-            "results": [],
-            "token_stats": {
-                "total_prompt_tokens": 0,
-                "total_completion_tokens": 0,
-                "total_tokens": 0,
-                "api_calls": 0,
-            },
+            "results": existing_results,
+            "token_stats": token_stats,
         }
+
+    # 增量模式：如果提供了 output_file，允许并发处理但顺序保存结果
+    incremental_mode = output_file is not None
+    if incremental_mode:
+        logger.info(f"[{sample_id}] Incremental mode enabled, allowing concurrent processing with sequential saving")
 
     # 2. 单个 QA 的处理函数
     def _process_single_qa(qa_idx: int, qa: Dict) -> Dict:
@@ -671,6 +710,7 @@ def process_sample(
         all_answer_time.append(answer_time)
         print(f"average qa answer time = {sum(all_answer_time) / len(all_answer_time)}")
         result_dict = {
+            "qa_idx": qa_idx,
             "question": question,
             "prediction": generated_answer,
             "reference": reference,
@@ -688,8 +728,39 @@ def process_sample(
 
         return {"qa_idx": qa_idx, "result": result_dict}
 
-    # 3. 并发执行所有 QA 任务
+    # 定义保存结果的函数（供增量模式使用）
+    def save_incremental_results(new_results_list, all_current_results=None):
+        """保存增量结果到文件"""
+        if all_current_results is None:
+            all_current_results = existing_results + [res["result"] for res in new_results_list]
+
+        # 计算 token stats
+        token_stats = {
+            "total_prompt_tokens": 0,
+            "total_completion_tokens": 0,
+            "total_tokens": 0,
+            "api_calls": len(all_current_results),
+        }
+        for res in all_current_results:
+            t_usage = res.get("token_usage", {})
+            token_stats["total_prompt_tokens"] += t_usage.get("prompt_tokens", 0)
+            token_stats["total_completion_tokens"] += t_usage.get("completion_tokens", 0)
+            token_stats["total_tokens"] += t_usage.get("total_tokens", 0)
+
+        # 保存到文件
+        output_data = {
+            "sample_id": sample_id,
+            "results": all_current_results,
+            "token_stats": token_stats,
+        }
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(output_data, f, ensure_ascii=False, indent=2)
+        return output_data
+
+    # 3. 执行 QA 任务（增量模式并发处理+实时保存，否则并发不保存）
     indexed_qa_results = []
+
+    # 并发执行所有 QA 任务
     with ThreadPoolExecutor(
         max_workers=min(max_qa_workers, len(valid_qa_tasks))
     ) as executor:
@@ -697,17 +768,41 @@ def process_sample(
             executor.submit(_process_single_qa, qa_idx, qa)
             for qa_idx, qa in valid_qa_tasks
         ]
+
+        # 按完成顺序处理结果
         for future in as_completed(futures):
             try:
-                indexed_qa_results.append(future.result())
+                result = future.result()
+                indexed_qa_results.append(result)
+
+                # 如果是增量模式，立即保存
+                if incremental_mode:
+                    # 合并现有结果和新结果
+                    all_current_results = existing_results + [res["result"] for res in indexed_qa_results]
+                    save_incremental_results(indexed_qa_results, all_current_results)
+                    logger.info(f"[{sample_id}] Saved incremental result for QA idx {result['qa_idx']} to {output_file}")
+
             except Exception as e:
                 logger.error(
                     f"[{sample_id}] QA execution encountered error: {e}"
                 )
 
-    # 4. 排序恢复原本的 QA 逻辑顺序，并统一汇总 token 统计数据
+    # 4. 排序恢复原本的 QA 逻辑顺序
     indexed_qa_results.sort(key=lambda x: x["qa_idx"])
 
+    # 如果是增量模式，从文件读取最新数据返回（因为文件包含了所有结果）
+    if incremental_mode:
+        try:
+            with open(output_file, 'r', encoding='utf-8') as f:
+                saved_data = json.load(f)
+            logger.info(f"[{sample_id}] Returning saved data from {output_file}")
+            return saved_data
+        except Exception as e:
+            logger.error(f"[{sample_id}] Failed to read saved data: {e}")
+            # 回退到重新计算
+            pass
+
+    # 非增量模式或读取失败：重新计算结果
     qa_results = []
     sample_token_stats = {
         "total_prompt_tokens": 0,
@@ -827,7 +922,10 @@ def main():
         entry_loader = QdrantEntryLoader(args.qdrant_dir, summary_suffix="_summary")
     else:
         entry_loader = QdrantEntryLoader(args.qdrant_dir)
-    
+
+    device_ = "cuda"
+    if any(sub in args.llm_model.lower() for sub in ["kimi", "deepseek"]):
+        device_ = "cpu"
     # Initialize embedding model
     if args.embedder == 'openai':
         embedder_cfg = BaseTextEmbedderConfig(
@@ -841,7 +939,7 @@ def main():
         embedder_cfg = BaseTextEmbedderConfig(
             model=args.embedding_model_path,
             embedding_dims=384,
-            model_kwargs={"device": "cuda"},
+            model_kwargs={"device": device_},
         )
         embedder = TextEmbedderHuggingface(embedder_cfg)
     
@@ -892,7 +990,8 @@ def main():
             args.allow_categories, args.limit_per_speaker,
             args.total_limit, args.retrieval_mode,
             enable_summary=args.enable_summary,
-            summary_limit=args.summary_limit
+            summary_limit=args.summary_limit,
+            output_file=sample_file
         )
         if sample_result is None:
             continue
