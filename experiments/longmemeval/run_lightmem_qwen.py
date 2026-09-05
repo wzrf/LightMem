@@ -2,6 +2,7 @@ from openai import OpenAI
 import json
 from tqdm import tqdm
 import datetime
+import logging
 import time
 import os
 import sys
@@ -21,6 +22,43 @@ API_KEY = 'sk-dummy'
 LLMLINGUA_MODEL_PATH = '/mnt/qjhs-sh-lab-01/models/llmlingua-2-bert-base-multilingual-cased-meetingbank'
 EMBEDDING_MODEL_PATH = '/mnt/qjhs-sh-lab-01/models/all-MiniLM-L6-v2'
 
+def load_compressor_and_embedder(device_c, device_e):
+    from lightmem.configs.text_embedder.base import TextEmbedderConfig
+    from lightmem.configs.pre_compressor.base import PreCompressorConfig
+    from lightmem.factory.pre_compressor.factory import PreCompressorFactory
+    from lightmem.factory.text_embedder.factory import TextEmbedderFactory
+    print(f"using compressor device {device_c}, embedding model {device_e}")
+    embedder_config = {
+            "model_name": "huggingface",
+            "configs": {
+                "model": EMBEDDING_MODEL_PATH,
+                "embedding_dims": 384,
+                "model_kwargs": {"device": device_e},
+            },
+        }
+    compressor_config = {
+            "model_name": "llmlingua-2",
+            "configs": {
+                "llmlingua_config": {
+                    "model_name": LLMLINGUA_MODEL_PATH,
+                    "device_map": device_c,
+                    "use_llmlingua2": True,
+                },
+                "compress_config": {
+                    "instruction": "",
+                    "rate": 0.6,
+                    "target_token": -1
+                },
+            }
+        }
+
+    compressor = PreCompressorFactory.from_config(
+        PreCompressorConfig(**compressor_config)
+    )
+    embedder = TextEmbedderFactory.from_config(
+        TextEmbedderConfig(**embedder_config)
+    )
+    return compressor, embedder
 
 def get_anscheck_prompt(task, question, answer, response, abstention=False):
     if not abstention:
@@ -131,7 +169,11 @@ class LLMModel:
                     raise
 
 
-def load_lightmem(collection_name):
+def load_lightmem(collection_name, compressor, embedder):
+    if "kimi" in LLM_MODEL.lower() or "deepseek" in LLM_MODEL.lower():
+        device_ = "cpu"
+    else:
+        device_ = "cuda"
     config = {
         "pre_compress": True,
         "pre_compressor": {
@@ -139,7 +181,7 @@ def load_lightmem(collection_name):
             "configs": {
                 "llmlingua_config": {
                     "model_name": LLMLINGUA_MODEL_PATH,
-                    "device_map": "cuda",
+                    "device_map": device_,
                     "use_llmlingua2": True,
                 },
             }
@@ -168,7 +210,7 @@ def load_lightmem(collection_name):
             "configs": {
                 "model": EMBEDDING_MODEL_PATH,
                 "embedding_dims": 384,
-                "model_kwargs": {"device": "cuda"},
+                "model_kwargs": {"device": device_},
             },
         },
         "retrieve_strategy": "embedding",
@@ -197,7 +239,7 @@ def load_lightmem(collection_name):
             },
             "extraction_mode": extraction_mode  ## mengyao_debug struct mem
         }
-    lightmem = LightMemory.from_config(config)
+    lightmem = LightMemory.from_config_with_compressor_embedder(config, compressor, embedder)
     return lightmem
 
 
@@ -208,7 +250,7 @@ INIT_RESULT = {
 }
 
 
-def process_item(item):
+def process_item(item, compressor, embedder):
     llm_judge = LLMModel(JUDGE_MODEL, JUDGE_MODEL_API_KEY, JUDGE_MODEL_BASE_URL)
     llm = LLMModel(LLM_MODEL, API_KEY, API_BASE_URL)
     qid = item["question_id"]
@@ -225,7 +267,7 @@ def process_item(item):
     do_build = True
     if os.path.exists(flag_file):
         print(f"question {qid} build complete flag found, skipping build.")
-        lightmem = load_lightmem(collection_name=qid)
+        lightmem = load_lightmem(collection_name=qid, compressor=compressor, embedder=embedder)
         do_build = False
     else:
         # 如果未完成 Build，清理可能存在的未完成历史缓存
@@ -233,7 +275,7 @@ def process_item(item):
             print(f"question {qid} incomplete build found, clearing cache...")
             shutil.rmtree(qdrant_path)
 
-        lightmem = load_lightmem(collection_name=qid)
+        lightmem = load_lightmem(collection_name=qid, compressor=compressor, embedder=embedder)
         sessions = item["haystack_sessions"]
         timestamps = item["haystack_dates"]
 
@@ -266,6 +308,27 @@ def process_item(item):
 
         time_end = time.time()
         construction_time = time_end - time_start
+
+        if args.enable_summary:
+            print(f"\n{'─' * 70}")
+            print("Phase 2.5: Generating summaries")
+            print(f"{'─' * 70}")
+
+            summarize_start_time = time.time()
+
+            lightmem_for_summary = lightmem
+
+            summary_result = lightmem_for_summary.summarize(
+                retrieval_scope="global",
+                time_window=3600, ## summary_time_window
+                top_k_seeds=15, ## summary_top_k_seeds
+                process_all=True
+            )
+
+        else:
+            logging.info(f"\n{'─' * 70}")
+            logging.info("Phase 2.5: Skipping summary generation (disabled)")
+            logging.info(f"{'─' * 70}")
 
         # 构建完成，生成本地标志文件
         os.makedirs(qdrant_path, exist_ok=True)
@@ -324,30 +387,54 @@ def process_item(item):
 def main():
     data = json.load(open(DATA_PATH, "r"))
 
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    if args.extraction_mode == "flat":
+        device_c = "cuda:2"
+        device_e = "cpu"
+    else:
+        device_c = "cuda:4"
+        device_e = "cpu"
+
+    compressor, embedder = load_compressor_and_embedder(device_c, device_e)
+
     try:
-        with Pool(processes=MAX_WORKERS) as pool:
-            # chunksize=1 保证任务逐个派发，tqdm 可以准确显示进度
-            for _ in tqdm(pool.imap_unordered(process_item, data), total=len(data)):
-                pass
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = [
+                executor.submit(process_item, item, compressor, embedder)
+                for item in data
+            ]
+
+            for future in tqdm(as_completed(futures), total=len(futures)):
+                future.result()
+
     except KeyboardInterrupt:
-        print("\n[Ctrl+C] 收到中断信号，正在终止所有子进程...")
-        pool.terminate()  # 立即强行杀掉所有子进程
-        pool.join()
+        print("\n[Ctrl+C] 收到中断信号，正在停止线程...")
         sys.exit(1)
 
 if __name__ == "__main__":
 
-    API_BASE_URL = 'http://127.0.0.1:30004/v1'
-    # LLM_MODEL = 'qwen3-8b'
-    LLM_MODEL = 'deepseek-v3.2' ## mengyao_debug change this.
+    # API_BASE_URL = 'http://127.0.0.1:30004/v1'
+    # # LLM_MODEL = 'qwen3-8b'
+    # LLM_MODEL = 'Kimi-K2.6' ## mengyao_debug change this.
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--extraction_mode', type=str, default='flat',
                        choices=['flat', 'event'],
                        help='Extraction mode for LightMem')
+    parser.add_argument('--enable_summary', action='store_true',  ##mengyao_debug: summary=structmem
+                       help='Whether to generate summaries')
     parser.add_argument('--dataset', type=str, default='../../data/longmemeval_s_cleaned.json',
                         help='Path to LongMemEval dataset')
+    parser.add_argument('--LLM_MODEL', type=str,
+                        help='llm model')
+    parser.add_argument('--API_BASE_URL', type=str,
+                        help='llm model api')
+
     args = parser.parse_args()
+
+    API_BASE_URL = args.API_BASE_URL
+    LLM_MODEL = args.LLM_MODEL
 
     extraction_mode = args.extraction_mode ## mengyao_debug lightmem / structmem
     post_tag=""
@@ -361,7 +448,7 @@ if __name__ == "__main__":
     if LLM_MODEL != "qwen3-8b":
         post_tag += f"_{LLM_MODEL}"
 
-    MAX_WORKERS = 16
+    MAX_WORKERS = 32
     if os.environ.get('DEBUG') == "1":
         MAX_WORKERS = 1
     RESULTS_DIR = f'../lightmem_longmemeval_results{post_tag}' ## mengyao_debug 测试结果
@@ -369,4 +456,10 @@ if __name__ == "__main__":
     DATA_PATH = args.dataset
     TOKEN_CONSUMPTION = f"../token_consumption_build_memory_longmemeval{post_tag}/" ## mengyao_debug token消耗
     os.makedirs(TOKEN_CONSUMPTION, exist_ok=True)
+    os.makedirs(QDRANT_DATA_DIR, exist_ok=True)
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+
+    print(f"RESULTS_DIR={RESULTS_DIR}")
+    print(f"TOKEN_CONSUMPTION={TOKEN_CONSUMPTION}")
+    print(f"QDRANT_DATA_DIR={QDRANT_DATA_DIR}")
     main()

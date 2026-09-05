@@ -52,6 +52,10 @@ def parse_args():
                        help='Top K seeds for summarization')
     parser.add_argument('--workers', type=int, default=MAX_WORKERS, 
                        help='Max parallel workers')
+    parser.add_argument('--LLM_MODEL', type=str,
+                       help='llm model')
+    parser.add_argument('--API_BASE_URL', type=str,
+                       help='llm model api')
     
     return parser.parse_args()
 # ============ Utility Functions ============
@@ -542,7 +546,7 @@ def load_compressor_and_embedder():
             "configs": {
                 "model": EMBEDDING_MODEL_PATH,
                 "embedding_dims": 384,
-                "model_kwargs": {"device": "cuda:2"},
+                "model_kwargs": {"device": "cuda:6"},
             },
         }
     compressor_config = {
@@ -550,7 +554,7 @@ def load_compressor_and_embedder():
             "configs": {
                 "llmlingua_config": {
                     "model_name": LLMLINGUA_MODEL_PATH,
-                    "device_map": "cuda:3",
+                    "device_map": "cuda:7",
                     "use_llmlingua2": True,
                 },
                 "compress_config": {
@@ -573,7 +577,6 @@ def load_compressor_and_embedder():
 # ============ Main Execution ============
 
 def main():
-    args = parse_args()
 
     QDRANT_PRE_UPDATE_DIR = './qdrant_pre_update'
     QDRANT_POST_UPDATE_DIR = './qdrant_post_update'
@@ -600,6 +603,9 @@ def main():
     os.makedirs(QDRANT_PRE_UPDATE_DIR, exist_ok=True)
     os.makedirs(QDRANT_POST_UPDATE_DIR, exist_ok=True)
     os.makedirs(TOKEN_CONSUMPTION, exist_ok=True)
+
+    print(f"QDRANT_POST_UPDATE_DIR={QDRANT_POST_UPDATE_DIR}")
+    print(f"TOKEN_CONSUMPTION={TOKEN_CONSUMPTION}")
 
     main_logger = logging.getLogger("lightmem.parallel.main")
     main_logger.setLevel(logging.INFO)
@@ -766,12 +772,16 @@ def main():
 
 
 # LLM_MODEL = 'qwen3-8b' ## mengyao_debug change this
-LLM_MODEL = 'Kimi-K2.6' ## change this
-API_BASE_URL = 'http://127.0.0.1:30004/v1'
+# LLM_MODEL = 'Kimi-K2.6' ## change this
+# API_BASE_URL = 'http://127.0.0.1:30004/v1'
 
 if __name__ == "__main__":
     MAX_WORKERS = 16
     if os.environ.get('DEBUG') == "1":
         MAX_WORKERS = 1
+    args = parse_args()
+    LLM_MODEL = args.LLM_MODEL
+    API_BASE_URL = args.API_BASE_URL
+
     mp.set_start_method('spawn', force=True)
     main()
