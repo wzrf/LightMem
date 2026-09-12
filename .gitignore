@@ -1,4 +1,11 @@
-experiments/longmemeval/qdrant_data/
+experiments/lightmem_halumem_results*
+experiments/longmemeval/qdrant_data_event
+experiments/lightmem_longmemeval_results*
+experiments/lightmem_locomo_results*
+experiments/results
+experiments/locomo/qdrant_*
+experiments/token_consumption_*
+experiments/longmemeval/qdrant_data*
 data/
 # Development files of this project
 /dev

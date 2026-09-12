@@ -22,6 +22,7 @@ from lightmem.factory.memory_buffer.short_term_memory import ShortMemBufferManag
 from lightmem.memory.utils import *
 from lightmem.memory.prompts import METADATA_GENERATE_PROMPT, UPDATE_PROMPT
 from lightmem.configs.logging.utils import get_logger
+import time
 
 GLOBAL_TOPIC_IDX = 0
 GLOBAL_LAST_SUMMARY_TIME = None

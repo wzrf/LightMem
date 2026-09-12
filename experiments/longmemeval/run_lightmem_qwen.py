@@ -22,6 +22,8 @@ API_KEY = 'sk-dummy'
 LLMLINGUA_MODEL_PATH = '/mnt/qjhs-sh-lab-01/models/llmlingua-2-bert-base-multilingual-cased-meetingbank'
 EMBEDDING_MODEL_PATH = '/mnt/qjhs-sh-lab-01/models/all-MiniLM-L6-v2'
 
+os.environ["OMP_NUM_THREADS"] = "8"
+
 def load_compressor_and_embedder(device_c, device_e):
     from lightmem.configs.text_embedder.base import TextEmbedderConfig
     from lightmem.configs.pre_compressor.base import PreCompressorConfig
@@ -389,14 +391,8 @@ def main():
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    if args.extraction_mode == "flat":
-        device_c = "cuda:2"
-        device_e = "cpu"
-    else:
-        device_c = "cuda:4"
-        device_e = "cpu"
 
-    compressor, embedder = load_compressor_and_embedder(device_c, device_e)
+    compressor, embedder = load_compressor_and_embedder(device_c="cpu", device_e="cpu")
 
     try:
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:

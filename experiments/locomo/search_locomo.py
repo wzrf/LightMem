@@ -20,6 +20,8 @@ from llm_judge import evaluate_llm_judge
 from lightmem.fusionrag.run_question import FusionRAGModel
 from lightmem.fusionrag.sglang_kvcache import run_one_question_sglang
 
+os.environ["OMP_NUM_THREADS"] = "4"
+
 all_memory_summarize_percentage=[]
 all_answer_time = []
 fusion_rag_model = FusionRAGModel(
@@ -923,9 +925,9 @@ def main():
     else:
         entry_loader = QdrantEntryLoader(args.qdrant_dir)
 
-    device_ = "cuda"
-    if any(sub in args.llm_model.lower() for sub in ["kimi", "deepseek"]):
-        device_ = "cpu"
+    device_ = "cpu"
+    # if any(sub in args.llm_model.lower() for sub in ["kimi", "deepseek"]):
+    #     device_ = "cpu"
     # Initialize embedding model
     if args.embedder == 'openai':
         embedder_cfg = BaseTextEmbedderConfig(

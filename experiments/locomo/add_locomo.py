@@ -15,6 +15,8 @@ import argparse
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 import multiprocessing as mp
 
+os.environ["OMP_NUM_THREADS"] = "4"
+
 # ============ Configuration ============
 LOGS_ROOT = "./logs"
 RUN_TIMESTAMP = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -536,17 +538,18 @@ def process_single_sample(sample, api_key, args, TOKEN_CONSUMPTION, QDRANT_PRE_U
         }
 
 
-def load_compressor_and_embedder():
+def load_compressor_and_embedder(device_c, device_e):
     from lightmem.configs.text_embedder.base import TextEmbedderConfig
     from lightmem.configs.pre_compressor.base import PreCompressorConfig
     from lightmem.factory.pre_compressor.factory import PreCompressorFactory
     from lightmem.factory.text_embedder.factory import TextEmbedderFactory
+    print(f"using compressor device {device_c}, embedding model {device_e}")
     embedder_config = {
             "model_name": "huggingface",
             "configs": {
                 "model": EMBEDDING_MODEL_PATH,
                 "embedding_dims": 384,
-                "model_kwargs": {"device": "cuda:6"},
+                "model_kwargs": {"device": device_e},
             },
         }
     compressor_config = {
@@ -554,7 +557,7 @@ def load_compressor_and_embedder():
             "configs": {
                 "llmlingua_config": {
                     "model_name": LLMLINGUA_MODEL_PATH,
-                    "device_map": "cuda:7",
+                    "device_map": device_c,
                     "use_llmlingua2": True,
                 },
                 "compress_config": {
@@ -639,7 +642,7 @@ def main():
     main_logger.info("Scanning existing collections...")
     main_logger.info("=" * 70)
 
-    compressor, embedder = load_compressor_and_embedder()
+    compressor, embedder = load_compressor_and_embedder(device_e="cpu", device_c="cpu")
     
     missing = []
     for sample in data:
