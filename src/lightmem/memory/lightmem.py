@@ -163,6 +163,7 @@ class LightMemory:
             "embedding_total_tokens": 0,
             "summarize_origin_text_tokens": 0,
             "summarize_summarize_tokens": 0,
+            "fusionrag_stats": [],
         }
         self.logger.info("Token statistics tracking initialized")
         
@@ -589,7 +590,8 @@ class LightMemory:
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "total_tokens": 0,
-            "reuse_history_tokens": 0
+            "reuse_history_tokens": 0,
+            "fusionrag_stats": []
         }
         token_lock = threading.Lock()
         def update_entry(entry):
@@ -623,12 +625,15 @@ class LightMemory:
                 return
             # ====== token consumption ======
             usage = updated_entry["usage"]
+            fusionrag_stats = updated_entry["fusionrag_stats"]
             with token_lock:
                 update_token_stats["calls"] += 1
                 update_token_stats["prompt_tokens"] += usage.get("prompt_tokens", 0)
                 update_token_stats["completion_tokens"] += usage.get("completion_tokens", 0)
                 update_token_stats["total_tokens"] += usage.get("total_tokens", 0)
                 update_token_stats["reuse_history_tokens"] += len(target_memory) + len(candidate_memories)
+                if fusionrag_stats is not None:
+                    update_token_stats["fusionrag_stats"].append(fusionrag_stats)
                 
             self.logger.debug(
                 f"[{call_id}] Update LLM call for {eid} - "
@@ -660,6 +665,7 @@ class LightMemory:
             self.token_stats["update_completion_tokens"] += update_token_stats["completion_tokens"]
             self.token_stats["update_total_tokens"] += update_token_stats["total_tokens"]
             self.token_stats["reuse_history_tokens"] += update_token_stats["reuse_history_tokens"]
+            self.token_stats["fusionrag_stats"].extend(update_token_stats["fusionrag_stats"])
         self.logger.info(f"[{call_id}] Offline update completed:")
         self.logger.info(f"[{call_id}]   - Processed: {processed_count} entries")
         self.logger.info(f"[{call_id}]   - Updated: {updated_count} entries")
@@ -748,6 +754,7 @@ class LightMemory:
                 "total_embedding_calls": embedder_stats["total_calls"],
                 "total_embedding_tokens": embedder_stats["total_tokens"],
             },
+            "fusionrag_stats": self.token_stats["fusionrag_stats"],
             "llm": {
                 "add_memory": {
                     "calls": self.token_stats["add_memory_calls"],
@@ -869,28 +876,17 @@ class LightMemory:
                 e["payload"].get("speaker_name") or e["payload"].get("speaker_id") or "?"
                 for e in Cbuf
             ))
-            if os.getenv("FUSIONRAG", "").lower() == "true":
-                summary_text = call_summary_llm_fusionrag(
-                    manager=self.manager,
-                    buffer_text=buffer_text,
-                    supplementary_text_list=supplementary_text_list,
-                    time_range=time_range_str,
-                    speakers=speakers,
-                    custom_prompt=SUMMARY_PROMPT,
-                    token_stats=self.token_stats,
-                    logger=self.logger
-                )
-            else:
-                summary_text = call_summary_llm(
-                    manager=self.manager,
-                    buffer_text=buffer_text,
-                    supplementary_text=supplementary_text,
-                    time_range=time_range_str,
-                    speakers=speakers,
-                    custom_prompt=SUMMARY_PROMPT,
-                    token_stats=self.token_stats,
-                    logger=self.logger
-                )
+            summary_text = call_summary_llm(
+                manager=self.manager,
+                buffer_text=buffer_text,
+                supplementary_text=supplementary_text,
+                supplementary_text_list=supplementary_text_list,
+                time_range=time_range_str,
+                speakers=speakers,
+                custom_prompt=SUMMARY_PROMPT,
+                token_stats=self.token_stats,
+                logger=self.logger
+            )
             self.logger.debug(f"[{call_id}] Generated {len(summary_text)} chars")
             if "</think>" in summary_text:
                 summary_text=summary_text.split("</think>")[1]

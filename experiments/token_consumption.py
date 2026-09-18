@@ -217,7 +217,7 @@ def llm_judge_answer(question: str, prediction: str, reference: str,
         )
 
         # 解析响应
-        content = response.choices[0].message.content or ""
+        content = response.choices[0].message.content or response.choices[0].message.model_extra["reasoning_content"]
 
         # 尝试解析JSON
         text = str(content or "").strip()
@@ -251,6 +251,7 @@ def batch_llm_judge(items_to_judge, model="GLM-5.3", max_concurrent=32, prompt_v
     """
     批量处理需要LLM判断的项目 - 多线程版本
     """
+    print(f"batch_llm_judge max_concurrent={max_concurrent}!!")
     final_scores = []
 
     def process_item(item):
@@ -507,7 +508,8 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
                     })
 
             except Exception as e:
-                print(f"Error reading result file {file_path}: {e}")
+                ""
+                # print(f"Error reading result file {file_path}: {e}")
     else:
         print(f"Warning: Result directory {result_dir} does not exist.")
 
@@ -515,7 +517,7 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
     if items_need_judge:
         print(f"\nRunning LLM judge for {len(items_need_judge)} items...")
         try:
-            judged_scores = batch_llm_judge(items_need_judge, model="GLM-5.3", max_concurrent=32)
+            judged_scores = batch_llm_judge(items_need_judge, model="GLM-5.3", max_concurrent=64)
 
             # 更新统计中的占位符
             for idx, score in enumerate(judged_scores):
@@ -642,11 +644,16 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
 
 if __name__ == "__main__":
     tasks = [
-        # (
-        #     "./token_consumption_build_memory_locomo_fusionrag/",
-        #     "./lightmem_locomo_results_fusionrag",
-        #     "locomo",
-        # ),
+        (
+            "./token_consumption_build_memory_locomo_fusionrag/",
+            "./lightmem_locomo_results_fusionrag",
+            "locomo",
+        ),
+        (
+            "./token_consumption_build_memory_locomo_event_fusionrag/",
+            "./lightmem_locomo_results_event_fusionrag",
+            "locomo",
+        ),
 
         # (
         #     "./token_consumption_build_memory_locomo/",
@@ -693,11 +700,11 @@ if __name__ == "__main__":
         #     "./lightmem_longmemeval_results_GLM-4.5-Air",
         #     "lme_lightmem_GLM-4.5-Air",
         # ),
-        (
-            "./token_consumption_build_memory_longmemeval_event_GLM-4.5-Air",
-            "./xxx",
-            "lme_structsmem_GLM-4.5-Air",
-        ),
+        # (
+        #     "./token_consumption_build_memory_longmemeval_event_GLM-4.5-Air",
+        #     "./lightmem_longmemeval_results_event_GLM-4.5-Air",
+        #     "lme_structsmem_GLM-4.5-Air",
+        # ),
         # (
         #     "./token_consumption_build_memory_longmemeval_Kimi-K2.6",
         #     "./lightmem_longmemeval_results_Kimi-K2.6",

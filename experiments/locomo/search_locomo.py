@@ -33,7 +33,7 @@ fusion_rag_model = FusionRAGModel(
             draft_model_name="qwen2.5-3b",
             preprocess_model_path="/data2/qy_tmp/xumengyao/bge-m3",
             draft_model_path="/mnt/qjhs-sh-lab-01/models/Qwen2.5-3B-Instruct",
-            draft_model_url="http://127.0.0.1:30005/v1/completions",
+            draft_model_url="http://192.168.0.238:30005/v1/completions",
             apikey="xxx",
             use_local_draft_model=False,
         )
@@ -405,6 +405,7 @@ def process_sample(
     max_qa_workers: int = 16,  # 新增 QA 并发数控制参数
     output_file: Optional[str] = None,
     sample_question_file: str=None,
+    llm_base_url="",
 ) -> Dict:
     """Process a single sample with all its QA pairs in parallel.
 
@@ -625,7 +626,7 @@ def process_sample(
         logger.info(f"[{sample_id}] Speaker distribution: {speaker_dist}")
 
         # Build prompt
-        user_prompt, system_prompt, prefix, fusionrag_list = build_prompt_with_speaker_memories(
+        user_prompt, prefix, _, fusionrag_list = build_prompt_with_speaker_memories(
             question,
             retrieved_entries,
             enable_summary=enable_summary,
@@ -633,7 +634,7 @@ def process_sample(
         )
         all_sample_questions.append({
             "query_prompt": question,
-            "system_prompt": system_prompt,
+            "system_prompt": "You are an QA Expert.",
             "prefix": prefix,
             "fusionrag_list": fusionrag_list,
             "reference": reference
@@ -658,16 +659,21 @@ def process_sample(
                 token_usage["completion_tokens"] = 0
                 token_usage["total_tokens"] = 0
             elif os.getenv("FUSIONRAG", "").lower() == "true":
+                fusionrag_list.insert(0, prefix)
                 generated_answer, usage_info = generate_response_with_fusionrag(
-                    system_prompt=system_prompt,
-                    prefix=prefix,
+                    system_prompt="You are an QA Expert.",
+                    prefix="",
                     fusionrag_cache_list=fusionrag_list,
-                    query_prompt=question,
-                    model="Kimi-k2.6"  ## mengyao_debug qwen or kimi-k2.6
+                    query_prompt=f"{question}\n Now output and short and concise answer. \n Answer:",
+                    model="Qwen3-8B",
+                    sglang_url=llm_base_url + "/completions",
+                    sglang_url_prefiller=llm_base_url + "/completions",
+                    max_tokens=50,
                 )
                 token_usage["prompt_tokens"] = usage_info["prompt_tokens"]
                 token_usage["completion_tokens"] = usage_info["completion_tokens"]
                 token_usage["total_tokens"] = usage_info["total_tokens"]
+                generated_answer = generated_answer.replace("Answer:", "")
             else:
                 response = llm_client.chat.completions.create(
                     model=llm_model,
@@ -994,10 +1000,10 @@ def main():
     total_questions = 0
     category_counts = {1: 0, 2: 0, 3: 0, 4: 0}
     total_summaries_used = 0
+    MAX_QA_WORKERS = 128
 
     if os.getenv("DEBUG", "").lower() == "true":
-        samples = samples[:1]
-        samples[0]['qa'] = samples[0]['qa'][:10]
+        MAX_QA_WORKERS = 1
 
     for sample in tqdm(samples, desc="Processing samples"):
         sample_file = os.path.join(args.output_dir, f"sample_{sample['sample_id']}.json")
@@ -1015,7 +1021,9 @@ def main():
             enable_summary=args.enable_summary,
             summary_limit=args.summary_limit,
             output_file=sample_file,
-            sample_question_file=sample_question_file
+            sample_question_file=sample_question_file,
+            llm_base_url=args.llm_base_url,
+            max_qa_workers=MAX_QA_WORKERS ## sample之间串行
         )
         if sample_result is None:
             continue

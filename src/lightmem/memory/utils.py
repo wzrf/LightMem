@@ -416,6 +416,8 @@ def process_extraction_results(
                 f"Completion: {usage.get('completion_tokens', 0)}, "
                 f"Total: {usage.get('total_tokens', 0)}"
             )
+        if "fusionrag_stats" in item:
+            token_stats["fusionrag_stats"].extend(item["fusionrag_stats"])
         logger.debug(f"[{call_id}] API Call {idx} raw output: {item.get('output_prompt', 'N/A')}")
         logger.debug(f"[{call_id}] API Call {idx} cleaned result: {item.get('cleaned_result', [])}")
         
@@ -539,6 +541,7 @@ def call_summary_llm(
     manager,
     buffer_text: str,
     supplementary_text: str,
+    supplementary_text_list: list[str],
     time_range: str,
     speakers: List[str],
     custom_prompt: Optional[str] = None,  
@@ -549,7 +552,7 @@ def call_summary_llm(
     logger.debug("Calling LLM for summary generation")
     speakers_str = ", ".join(sorted(speakers))
     prompt_template = custom_prompt if custom_prompt else LoCoMo_Cross_Event_Consolidation
-    
+
     if logger and custom_prompt:
         logger.debug("Using custom summary prompt")
     elif logger:
@@ -572,12 +575,37 @@ def call_summary_llm(
             "content": prompt
         }
     ]
-    response, usage_info = manager.generate_response(messages)
+
+    if os.getenv("FUSIONRAG", "").lower() == "true":
+        from lightmem.memory.prompts import LoCoMo_Cross_Event_Consolidation_prefix, \
+            LoCoMo_Cross_Event_Consolidation_postfix
+        speakers_str = ", ".join(sorted(speakers))
+        prompt_template = LoCoMo_Cross_Event_Consolidation_prefix
+
+        prefix = prompt_template.format(
+            bucket=time_range,
+            speakers=speakers_str,
+            aggregated_text=buffer_text,
+        )
+
+        supplementary_text_list[0] = prefix + supplementary_text_list[0]
+        response, usage_info, fusionrag_stats = manager.generate_response_with_fusionrag(
+            system_prompt="You are a professional conversation summarization assistant with temporal awareness.",
+            fusionrag_cache_list=supplementary_text_list,
+            prefix="",
+            query_prompt=LoCoMo_Cross_Event_Consolidation_postfix
+        )
+        fusionrag_stats["reuse_type"] = "reuse_decode"
+    else:
+        fusionrag_stats = {}
+        response, usage_info = manager.generate_response(messages)
+
     if token_stats is not None:
         token_stats["summarize_calls"] += 1
         token_stats["summarize_prompt_tokens"] += usage_info.get("prompt_tokens", 0)
         token_stats["summarize_completion_tokens"] += usage_info.get("completion_tokens", 0)
         token_stats["summarize_total_tokens"] += usage_info.get("total_tokens", 0)
+        token_stats["fusionrag_stats"].append(fusionrag_stats)
     
     if logger:
         logger.debug(
@@ -587,45 +615,6 @@ def call_summary_llm(
     
     return response
 
-def call_summary_llm_fusionrag(
-        manager,
-        buffer_text: str,
-        supplementary_text_list: list[str],
-        time_range: str,
-        speakers: List[str],
-        custom_prompt: Optional[str] = None,
-        token_stats: Dict[str, int] = None,
-        logger=None
-) -> str:
-    from lightmem.memory.prompts import LoCoMo_Cross_Event_Consolidation_prefix, LoCoMo_Cross_Event_Consolidation_postfix
-    speakers_str = ", ".join(sorted(speakers))
-    prompt_template = LoCoMo_Cross_Event_Consolidation_prefix
-
-    prefix = prompt_template.format(
-        bucket=time_range,
-        speakers=speakers_str,
-        aggregated_text=buffer_text,
-    )
-
-    response, usage_info = manager.generate_response_with_fusionrag(
-        system_prompt="You are a professional conversation summarization assistant with temporal awareness.",
-        fusionrag_cache_list=supplementary_text_list,
-        prefix=prefix,
-        query_prompt=LoCoMo_Cross_Event_Consolidation_postfix
-    )
-    if token_stats is not None:
-        token_stats["summarize_calls"] += 1
-        token_stats["summarize_prompt_tokens"] += usage_info.get("prompt_tokens", 0)
-        token_stats["summarize_completion_tokens"] += usage_info.get("completion_tokens", 0)
-        token_stats["summarize_total_tokens"] += usage_info.get("total_tokens", 0)
-
-    if logger:
-        logger.debug(
-            f"Summary generated: {len(response)} chars, "
-            f"tokens: {usage_info.get('total_tokens', 0)}"
-        )
-
-    return response
 
 def store_summary(
     summary_text: str,

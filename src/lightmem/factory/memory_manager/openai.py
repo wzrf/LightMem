@@ -22,22 +22,25 @@ class OpenaiManager:
     def __init__(self, config: BaseMemoryManagerConfig):
         self.config = config
 
-        self.recomputation_rate = 0.3
-        self.sglang_url = "http://127.0.0.1:30003/v1/completions"
-        self.sglang_url_prefiller = "http://127.0.0.1:30003/v1/completions"
-        self.fusion_rag_model = FusionRAGModel(
-            model_path='',
-            use_multi_gpu=True,
-            model_type="qwen3",
-            model_name="Qwen3-32B",
-            draft_model_type="qwen",
-            draft_model_name="qwen2.5-3b",
-            preprocess_model_path="/data2/qy_tmp/xumengyao/bge-m3",
-            draft_model_path="/mnt/qjhs-sh-lab-01/models/Qwen2.5-3B-Instruct",
-            draft_model_url="http://127.0.0.1:30005/v1/completions",
-            apikey="xxx",
-            use_local_draft_model=False,
-        )
+        self.recomputation_rate = 0.5
+        self.sglang_url = self.config.openai_base_url + "/completions"
+        self.sglang_url_prefiller = self.config.openai_base_url + "/completions"
+        if os.getenv("FUSIONRAG", "").lower() == "true":
+            self.fusion_rag_model = FusionRAGModel(
+                model_path='',
+                use_multi_gpu=True,
+                model_type="qwen3",
+                model_name="Qwen3-32B",
+                draft_model_type="qwen",
+                draft_model_name="qwen2.5-3b",
+                preprocess_model_path="/data2/qy_tmp/xumengyao/bge-m3",
+                draft_model_path="/mnt/qjhs-sh-lab-01/models/Qwen2.5-3B-Instruct",
+                draft_model_url="http://192.168.0.238:30005/v1/completions",
+                apikey="xxx",
+                use_local_draft_model=False,
+            )
+        else:
+            self.fusion_rag_model = None
 
         if not self.config.model:
             self.config.model = "gpt-4o-mini"
@@ -106,14 +109,19 @@ class OpenaiManager:
         query_prompt: str,
         model: str="qwen3-8b",
         max_tokens = 5000
-    ) -> Optional[str]:
+    ) -> (str, dict, dict):
 
         template = {
             "DEFAULT_SYSTEM_PROMPT": f"""<|im_start|>system\n{system_prompt}\n{prefix}""",
             "USER_PROMPT": f"""<|im_end|>\n<|im_start|>user\n\nQuestion: /no_think {query_prompt}<|im_end|>\n<|im_start|>assistant\nAnswer: </think>"""
         }
 
-        recompute_tokens, recompute_tokens_list, retrieved_docs, recompute_rate, sorted_doc_index, sorted_doc_index_before, _ = self.fusion_rag_model.draft_one_question(
+        fusionrag_cache_list_text = "".join(fusionrag_cache_list)
+        system_len = len(self.fusion_rag_model.draft_model_tokenizer.encode(template["DEFAULT_SYSTEM_PROMPT"]))
+        query_len = len(self.fusion_rag_model.draft_model_tokenizer.encode(template["USER_PROMPT"]))
+        origin_text_list_len = len(self.fusion_rag_model.draft_model_tokenizer.encode(fusionrag_cache_list_text))
+
+        recompute_tokens, recompute_tokens_list, retrieved_docs, recompute_rate, sorted_doc_index, sorted_doc_index_before, selected_indices = self.fusion_rag_model.draft_one_question(
             template["DEFAULT_SYSTEM_PROMPT"],  ## DEFAULT_SYSTEM_PROMPT
             fusionrag_cache_list,
             template["USER_PROMPT"],
@@ -152,7 +160,12 @@ class OpenaiManager:
                 "total_tokens": usage["total_tokens"],
             }
 
-            return content, usage_info
+            return content, usage_info, {
+                "system_len": system_len,
+                "query_len": query_len,
+                "origin_text_list_len": origin_text_list_len,
+                "fusionrag_text_list_len":  len(selected_indices),
+            }
         except Exception as e:
             print(e)
 
@@ -284,7 +297,6 @@ class OpenaiManager:
                 messages_use=messages_use,
                 topic_id_mapping=topic_id_mapping,
                 entry_type="relational",
-                use_fusionrag=True
             )
             
             return self._merge_dual_perspective_results(
@@ -319,6 +331,7 @@ class OpenaiManager:
                 "input_prompt": [],
                 "output_prompt": "",
                 "cleaned_result": [],
+                "fusionrag_stats": [],
                 "usage": {
                     "prompt_tokens": 0,
                     "completion_tokens": 0,
@@ -331,6 +344,9 @@ class OpenaiManager:
             if factual is not None:
                 merged["input_prompt"].extend(factual.get("input_prompt", []))
                 merged["cleaned_result"].extend(factual.get("cleaned_result", []))
+                fusionrag_stats = factual.get("fusionrag_stats", None)
+                if fusionrag_stats is not None:
+                    merged["fusionrag_stats"].extend(fusionrag_stats)
                 if factual.get("usage"):
                     for key in merged["usage"]:
                         merged["usage"][key] += factual["usage"].get(key, 0)
@@ -338,6 +354,9 @@ class OpenaiManager:
             if relational is not None:
                 merged["input_prompt"].extend(relational.get("input_prompt", []))
                 merged["cleaned_result"].extend(relational.get("cleaned_result", []))
+                fusionrag_stats = relational.get("fusionrag_stats", None)
+                if fusionrag_stats is not None:
+                    merged["fusionrag_stats"].extend(fusionrag_stats)
                 if relational.get("usage"):
                     for key in merged["usage"]:
                         merged["usage"][key] += relational["usage"].get(key, 0)
@@ -358,7 +377,6 @@ class OpenaiManager:
         messages_use: str,
         topic_id_mapping: Optional[List[List[int]]],
         entry_type: str = "factual",
-        use_fusionrag:bool = False
     ) -> List[Optional[Dict]]:
         """
         Args:
@@ -433,14 +451,17 @@ class OpenaiManager:
                     {"role": "user", "content": user_prompt},
                 ]
 
-                if use_fusionrag and os.getenv("FUSIONRAG", "").lower() == "true":
-                    raw_response, usage_info = self.generate_response_with_fusionrag(
+                if os.getenv("FUSIONRAG", "").lower() == "true":
+                    raw_response, usage_info, fusionrag_stats = self.generate_response_with_fusionrag(
                         system_prompt=system_prompt,
-                        prefix="Now here is the real conversation: ",
-                        fusionrag_cache_list=[user_prompt],
+                        prefix="",
+                        fusionrag_cache_list=["Now here is the real conversation: " + user_prompt],
                         query_prompt="Now extract **all possible facts or information** about the speakers from the real conversation."
                     )
+                    fusionrag_stats["reuse_type"] = "reuse_prefill"
                 else:
+                    fusionrag_stats = {}
+
                     raw_response, usage_info = self.generate_response(
                         messages=metadata_messages,
                         response_format={"type": "json_object"},
@@ -460,6 +481,7 @@ class OpenaiManager:
                     "output_prompt": raw_response,
                     "cleaned_result": metadata_facts,
                     "usage": usage_info,
+                    "fusionrag_stats": [fusionrag_stats],
                     "entry_type": entry_type
                 }
                 
@@ -470,6 +492,7 @@ class OpenaiManager:
                     "output_prompt": "",
                     "cleaned_result": [],
                     "usage": None,
+                    "fusionrag_stats": None,
                     "entry_type": entry_type
                 }
 
@@ -502,13 +525,16 @@ class OpenaiManager:
         ]
 
         if os.getenv("FUSIONRAG", "").lower() == "true":
-            response_text, usage_info = self.generate_response_with_fusionrag(
+            response_text, usage_info, fusionrag_stats = self.generate_response_with_fusionrag(
                 system_prompt=system_prompt,
                 prefix="",
                 fusionrag_cache_list=user_prompt_list,
                 query_prompt="Now decide whether the target memory should be updated, deleted, or ignored.",
             )
+            fusionrag_stats["reuse_type"] = "reuse_decode"
         else:
+            fusionrag_stats = {}
+
             response_text, usage_info = self.generate_response(
                 messages=messages,
                 response_format={"type": "json_object"}
@@ -520,7 +546,8 @@ class OpenaiManager:
             result = json.loads(response_text)
             if "action" not in result:
                 result = {"action": "ignore"}
-            result["usage"] = usage_info  
+            result["usage"] = usage_info
+            result["fusionrag_stats"] = fusionrag_stats
             return result
         except Exception:
-            return {"action": "ignore", "usage": usage_info if 'usage_info' in locals() else None}
+            return {"action": "ignore", "usage": usage_info if 'usage_info' in locals() else None, "fusionrag_stats": fusionrag_stats}
