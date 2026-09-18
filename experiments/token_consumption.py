@@ -643,76 +643,71 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
 if __name__ == "__main__":
     tasks = [
         # (
-        #     "./token_consumption_build_memory_locomo_event_fusionrag/",
-        #     "./lightmem_locomo_results_event_fusionrag",
-        #     "locomo",
-        # ),
-        # (
         #     "./token_consumption_build_memory_locomo_fusionrag/",
         #     "./lightmem_locomo_results_fusionrag",
         #     "locomo",
         # ),
 
-        (
-            "./token_consumption_build_memory_locomo/",
-            "./lightmem_locomo_results",
-            "locomo_lightmem_qwen3",
-        ),
-        (
-            "./token_consumption_build_memory_locomo_event/",
-            "./lightmem_locomo_results_event",
-            "locomo_structmem_qwen3",
-        ),
-        (
-            "./token_consumption_build_memory_locomo_GLM-4.5-Air",
-            "./lightmem_locomo_results_GLM-4.5-Air",
-            "locomo_lightmem_GLM-4.5-Air",
-        ),
-        (
-            "./token_consumption_build_memory_locomo_event_GLM-4.5-Air",
-            "./lightmem_locomo_results_event_GLM-4.5-Air",
-            "locomo_Structmem_GLM-4.5-Air",
-        ),
-        (
-            "./token_consumption_build_memory_locomo_Kimi-K2.6",
-            "./lightmem_locomo_results_Kimi-K2.6",
-            "locomo_lightmem_Kimi-K2.6",
-        ),
-        (
-            "./token_consumption_build_memory_locomo_event_Kimi-K2.6",
-            "./lightmem_locomo_results_event_Kimi-K2.6",
-            "locomo_Structmem_Kimi-K2.6",
-        ),
-        (
-            "./token_consumption_build_memory_longmemeval",
-            "./lightmem_longmemeval_results",
-            "lme_lightmem_qwen3",
-        ),
-        (
-            "./token_consumption_build_memory_longmemeval_event",
-            "./lightmem_longmemeval_results_event",
-            "lme_structmem_qwen3",
-        ),
-        (
-            "./token_consumption_build_memory_longmemeval_GLM-4.5-Air",
-            "./lightmem_longmemeval_results_GLM-4.5-Air",
-            "lme_lightmem_GLM-4.5-Air",
-        ),
+        # (
+        #     "./token_consumption_build_memory_locomo/",
+        #     "./lightmem_locomo_results",
+        #     "locomo_lightmem_qwen3",
+        # ),
+        # (
+        #     "./token_consumption_build_memory_locomo_event/",
+        #     "./lightmem_locomo_results_event",
+        #     "locomo_structmem_qwen3",
+        # ),
+        # (
+        #     "./token_consumption_build_memory_locomo_GLM-4.5-Air",
+        #     "./lightmem_locomo_results_GLM-4.5-Air",
+        #     "locomo_lightmem_GLM-4.5-Air",
+        # ),
+        # (
+        #     "./token_consumption_build_memory_locomo_event_GLM-4.5-Air",
+        #     "./lightmem_locomo_results_event_GLM-4.5-Air",
+        #     "locomo_Structmem_GLM-4.5-Air",
+        # ),
+        # (
+        #     "./token_consumption_build_memory_locomo_Kimi-K2.6",
+        #     "./lightmem_locomo_results_Kimi-K2.6",
+        #     "locomo_lightmem_Kimi-K2.6",
+        # ),
+        # (
+        #     "./token_consumption_build_memory_locomo_event_Kimi-K2.6",
+        #     "./lightmem_locomo_results_event_Kimi-K2.6",
+        #     "locomo_Structmem_Kimi-K2.6",
+        # ),
+        # (
+        #     "./token_consumption_build_memory_longmemeval",
+        #     "./lightmem_longmemeval_results",
+        #     "lme_lightmem_qwen3",
+        # ),
+        # (
+        #     "./token_consumption_build_memory_longmemeval_event",
+        #     "./lightmem_longmemeval_results_event",
+        #     "lme_structmem_qwen3",
+        # ),
+        # (
+        #     "./token_consumption_build_memory_longmemeval_GLM-4.5-Air",
+        #     "./lightmem_longmemeval_results_GLM-4.5-Air",
+        #     "lme_lightmem_GLM-4.5-Air",
+        # ),
         (
             "./token_consumption_build_memory_longmemeval_event_GLM-4.5-Air",
-            "./lightmem_longmemeval_results_event_GLM-4.5-Air",
+            "./xxx",
             "lme_structsmem_GLM-4.5-Air",
         ),
-        (
-            "./token_consumption_build_memory_longmemeval_Kimi-K2.6",
-            "./lightmem_longmemeval_results_Kimi-K2.6",
-            "lme_lightmem_kimi-K2.6",
-        ),
-        (
-            "./token_consumption_build_memory_longmemeval_event_Kimi-K2.6",
-            "./lightmem_longmemeval_results_event_Kimi-K2.6",
-            "lme_structmem_kimi-K2.6",
-        ),
+        # (
+        #     "./token_consumption_build_memory_longmemeval_Kimi-K2.6",
+        #     "./lightmem_longmemeval_results_Kimi-K2.6",
+        #     "lme_lightmem_kimi-K2.6",
+        # ),
+        # (
+        #     "./token_consumption_build_memory_longmemeval_event_Kimi-K2.6",
+        #     "./lightmem_longmemeval_results_event_Kimi-K2.6",
+        #     "lme_structmem_kimi-K2.6",
+        # ),
 
         # (
         #     "./token_consumption_build_memory_halumem_event",

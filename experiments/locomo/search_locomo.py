@@ -404,6 +404,7 @@ def process_sample(
     summary_limit: int = 5,
     max_qa_workers: int = 16,  # 新增 QA 并发数控制参数
     output_file: Optional[str] = None,
+    sample_question_file: str=None,
 ) -> Dict:
     """Process a single sample with all its QA pairs in parallel.
 
@@ -431,6 +432,7 @@ def process_sample(
     logger.info(f"\n{'='*80}")
     logger.info(f"Processing sample: {sample_id}")
     logger.info(f"{'='*80}")
+    all_sample_questions = []
     if os.getenv("DEBUG", "").lower() == "true" or os.getenv("DEBUG", "").lower() == "1":
         max_qa_workers = 1
 
@@ -629,6 +631,13 @@ def process_sample(
             enable_summary=enable_summary,
             summaries=retrieved_summaries if enable_summary else None,
         )
+        all_sample_questions.append({
+            "query_prompt": question,
+            "system_prompt": system_prompt,
+            "prefix": prefix,
+            "fusionrag_list": fusionrag_list,
+            "reference": reference
+        })
 
         # Generate answer
         token_usage = {
@@ -643,7 +652,12 @@ def process_sample(
             #mengyao_debug 1. 修改template
             #mengyao_debug 2. 修改ip:port/v1/completion
             #mengyao_debug 3. 修改 chat_template_kwargs
-            if os.getenv("FUSIONRAG", "").lower() == "true":
+            if os.getenv("DUMP_QUESTIONS", "").lower() == "true":
+                generated_answer = "dummpy"
+                token_usage["prompt_tokens"] = 0
+                token_usage["completion_tokens"] = 0
+                token_usage["total_tokens"] = 0
+            elif os.getenv("FUSIONRAG", "").lower() == "true":
                 generated_answer, usage_info = generate_response_with_fusionrag(
                     system_prompt=system_prompt,
                     prefix=prefix,
@@ -689,24 +703,27 @@ def process_sample(
             generated_answer = ""
 
         # Evaluate with LLM judge
-        try:
-            label = evaluate_llm_judge(
-                question,
-                reference,
-                generated_answer,
-                client_obj=judge_client,
-                model_name=judge_model,
-            )
-            metrics = {
-                "judge_correct": int(label),
-                "judge_response": "CORRECT" if int(label) == 1 else "WRONG",
-            }
-            logger.info(
-                f"[{sample_id}] [golden answer={reference}] [system answer= {generated_answer}] Judge: {'CORRECT' if int(label) == 1 else 'WRONG'}"
-            )
-        except Exception as e:
-            logger.error(f"[{sample_id}] Judge evaluation failed: {e}")
+        if os.getenv("DUMP_QUESTIONS", "").lower() == "true":
             metrics = {"judge_correct": 0, "judge_response": ""}
+        else:
+            try:
+                label = evaluate_llm_judge(
+                    question,
+                    reference,
+                    generated_answer,
+                    client_obj=judge_client,
+                    model_name=judge_model,
+                )
+                metrics = {
+                    "judge_correct": int(label),
+                    "judge_response": "CORRECT" if int(label) == 1 else "WRONG",
+                }
+                logger.info(
+                    f"[{sample_id}] [golden answer={reference}] [system answer= {generated_answer}] Judge: {'CORRECT' if int(label) == 1 else 'WRONG'}"
+                )
+            except Exception as e:
+                logger.error(f"[{sample_id}] Judge evaluation failed: {e}")
+                metrics = {"judge_correct": 0, "judge_response": ""}
 
         # Store results
         all_answer_time.append(answer_time)
@@ -788,6 +805,9 @@ def process_sample(
                 logger.error(
                     f"[{sample_id}] QA execution encountered error: {e}"
                 )
+
+    with open(sample_question_file, 'w', encoding='utf-8') as f:
+        json.dump(all_sample_questions, f, ensure_ascii=False, indent=2)
 
     # 4. 排序恢复原本的 QA 逻辑顺序
     indexed_qa_results.sort(key=lambda x: x["qa_idx"])
@@ -981,6 +1001,7 @@ def main():
 
     for sample in tqdm(samples, desc="Processing samples"):
         sample_file = os.path.join(args.output_dir, f"sample_{sample['sample_id']}.json")
+        sample_question_file = os.path.join(args.output_dir, f"sample_question_{sample['sample_id']}.json")
         # if os.path.exists(sample_file):
         #     print(f"skipping sample {sample['sample_id']} sample_file={sample_file}")
         #     continue
@@ -993,7 +1014,8 @@ def main():
             args.total_limit, args.retrieval_mode,
             enable_summary=args.enable_summary,
             summary_limit=args.summary_limit,
-            output_file=sample_file
+            output_file=sample_file,
+            sample_question_file=sample_question_file
         )
         if sample_result is None:
             continue

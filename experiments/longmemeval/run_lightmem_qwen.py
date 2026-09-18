@@ -172,10 +172,7 @@ class LLMModel:
 
 
 def load_lightmem(collection_name, compressor, embedder):
-    if "kimi" in LLM_MODEL.lower() or "deepseek" in LLM_MODEL.lower():
-        device_ = "cpu"
-    else:
-        device_ = "cuda"
+    device_ = "cpu"
     config = {
         "pre_compress": True,
         "pre_compressor": {
@@ -332,6 +329,9 @@ def process_item(item, compressor, embedder):
             logging.info("Phase 2.5: Skipping summary generation (disabled)")
             logging.info(f"{'─' * 70}")
 
+        lightmem.construct_update_queue_all_entries()
+        lightmem.offline_update_all_entries(score_threshold=0.9)
+
         # 构建完成，生成本地标志文件
         os.makedirs(qdrant_path, exist_ok=True)
         with open(flag_file, "w", encoding="utf-8") as f:
@@ -345,6 +345,7 @@ def process_item(item, compressor, embedder):
     messages.append({
         "role": "user",
         "content": f"Question time:{item['question_date']} and question:{item['question']}\nPlease answer the question based on the following memories: {memory_text}"
+                   f"Give an concise and short answer, the answer should be less than 10 words."
     })
     generated_answer, prompt_tokens, completion_tokens = llm.call_with_tokens(messages)
 
@@ -392,7 +393,7 @@ def main():
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
-    compressor, embedder = load_compressor_and_embedder(device_c="cpu", device_e="cpu")
+    compressor, embedder = load_compressor_and_embedder(device_c=compressor_device, device_e=embedder_device)
 
     try:
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -426,11 +427,19 @@ if __name__ == "__main__":
                         help='llm model')
     parser.add_argument('--API_BASE_URL', type=str,
                         help='llm model api')
+    parser.add_argument('--MAX_WORKERS', type=int,
+                        help='max workers')
+    parser.add_argument('--compressor_device', type=str, default="cpu",
+                        help='compressor_device')
+    parser.add_argument('--embedder_device', type=str, default="cpu",
+                        help='compressor_device')
 
     args = parser.parse_args()
 
     API_BASE_URL = args.API_BASE_URL
     LLM_MODEL = args.LLM_MODEL
+    compressor_device = args.compressor_device
+    embedder_device = args.embedder_device
 
     extraction_mode = args.extraction_mode ## mengyao_debug lightmem / structmem
     post_tag=""
@@ -441,10 +450,12 @@ if __name__ == "__main__":
     if os.getenv("FUSIONRAG", "").lower() == "true":
         post_tag += "_fusionrag"
 
-    if LLM_MODEL != "qwen3-8b":
+    if LLM_MODEL.lower() != "qwen3-8b":
         post_tag += f"_{LLM_MODEL}"
 
-    MAX_WORKERS = 32
+    print(f"post_tag={post_tag} LLM_MODEL={LLM_MODEL.lower()}")
+
+    MAX_WORKERS = args.MAX_WORKERS
     if os.environ.get('DEBUG') == "1":
         MAX_WORKERS = 1
     RESULTS_DIR = f'../lightmem_longmemeval_results{post_tag}' ## mengyao_debug 测试结果
@@ -458,4 +469,6 @@ if __name__ == "__main__":
     print(f"RESULTS_DIR={RESULTS_DIR}")
     print(f"TOKEN_CONSUMPTION={TOKEN_CONSUMPTION}")
     print(f"QDRANT_DATA_DIR={QDRANT_DATA_DIR}")
+
+
     main()

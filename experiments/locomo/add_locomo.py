@@ -58,6 +58,10 @@ def parse_args():
                        help='llm model')
     parser.add_argument('--API_BASE_URL', type=str,
                        help='llm model api')
+    parser.add_argument('--compressor_device', type=str, default="cpu",
+                        help='compressor_device')
+    parser.add_argument('--embedder_device', type=str, default="cpu",
+                        help='compressor_device')
     
     return parser.parse_args()
 # ============ Utility Functions ============
@@ -642,7 +646,7 @@ def main():
     main_logger.info("Scanning existing collections...")
     main_logger.info("=" * 70)
 
-    compressor, embedder = load_compressor_and_embedder(device_e="cpu", device_c="cpu")
+    compressor, embedder = load_compressor_and_embedder(device_c=args.compressor_device, device_e=args.embedder_device)
     
     missing = []
     for sample in data:
