@@ -172,7 +172,7 @@ class LLMModel:
 
 
 def load_lightmem(collection_name, compressor, embedder):
-    device_ = "cpu"
+    device_ = "cuda:0"
     config = {
         "pre_compress": True,
         "pre_compressor": {
@@ -190,7 +190,8 @@ def load_lightmem(collection_name, compressor, embedder):
         "topic_segmenter": {
             "model_name": "llmlingua-2",
         },
-        "messages_use": "user_only",
+        # "messages_use": "user_only",
+        "messages_use": "hybrid",
         "metadata_generate": True,
         "text_summary": True,
         "memory_manager": {
@@ -283,8 +284,8 @@ def process_item(item, compressor, embedder):
             while session and session[0]["role"] != "user":
                 session.pop(0)
             num_turns = len(session) // 2
+            print(f"question {qid} running session {session_idx}/{len(sessions)}")
             for turn_idx in range(num_turns):
-                print(f"question {qid} running session {session_idx}/{len(sessions)}")
                 turn_messages = session[turn_idx * 2: turn_idx * 2 + 2]
                 if len(turn_messages) < 2 or turn_messages[0]["role"] != "user" or turn_messages[1]["role"] != "assistant":
                     continue
@@ -337,6 +338,10 @@ def process_item(item, compressor, embedder):
         with open(flag_file, "w", encoding="utf-8") as f:
             f.write("build_complete")
 
+    result_filename = f"{RESULTS_DIR}/result_{item['question_id']}.json"
+    if os.path.exists(result_filename):
+        return
+
     related_memories = lightmem.retrieve(item["question"], limit=20)
     messages = []
     messages.append({"role": "system", "content": "You are a helpful assistant."})
@@ -358,9 +363,13 @@ def process_item(item, compressor, embedder):
             item["question_type"], item["question"], item["answer"], generated_answer
         )
     messages = [{"role": "user", "content": prompt}]
-    response = llm_judge.call(messages)
 
-    correct = 1 if true_or_false(response) else 0
+    try:
+        response = llm_judge.call(messages)
+
+        correct = 1 if true_or_false(response) else 0
+    except Exception as e:
+        correct = 0
 
     print(f"question={item['question']}, golden answer={item['answer']}, system answer={generated_answer}")
 
@@ -403,7 +412,10 @@ def main():
             ]
 
             for future in tqdm(as_completed(futures), total=len(futures)):
-                future.result()
+                try:
+                    future.result()
+                except Exception as e:
+                    print(f"\033[33m[Worker Error] {e}\033[0m")
 
     except KeyboardInterrupt:
         print("\n[Ctrl+C] 收到中断信号，正在停止线程...")

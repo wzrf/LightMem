@@ -122,7 +122,7 @@ def compute_cache_key(question: str, prediction: str, reference: str,
     返回：SHA256哈希字符串
     """
     # 使用prompt模板和内容计算哈希
-    content_to_hash = f"{SYSTEM_PROMPT}||{JUDGE_TEMPLATE}||{prompt_version}||{model}||{question}||{prediction}||{reference}"
+    content_to_hash = f"{SYSTEM_PROMPT}||{JUDGE_TEMPLATE}||{prompt_version}||{model}||{question}||{prediction}||{reference}||new3"
     return hashlib.sha256(content_to_hash.encode('utf-8')).hexdigest()
 
 
@@ -184,68 +184,54 @@ def llm_judge_answer(question: str, prediction: str, reference: str,
     if cached_score is not None:
         return cached_score
 
-    try:
-        # 获取API密钥，优先使用传入的参数，其次使用环境变量
-        if not api_key:
-            raise ValueError("OpenAI API key is required. Set OPENAI_API_KEY environment variable or pass api_key parameter.")
+    if not api_key:
+        raise ValueError("OpenAI API key is required. Set OPENAI_API_KEY environment variable or pass api_key parameter.")
 
-        # 创建同步客户端
-        client = OpenAI(
-            api_key=api_key,
-            base_url=base_url,
-            timeout=timeout,
-        )
+    # 创建同步客户端
+    client = OpenAI(
+        api_key=api_key,
+        base_url=base_url,
+        timeout=timeout,
+    )
 
-        # 格式化prompt
-        prompt = JUDGE_TEMPLATE.format(
-            question=question,
-            reference=reference,
-            prediction=prediction
-        )
+    # 格式化prompt
+    prompt = JUDGE_TEMPLATE.format(
+        question=question,
+        reference=reference,
+        prediction=prediction
+    )
 
-        # 调用API
-        response = client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=2048,
-            stream=False,
-            response_format={"type": "json_object"},
-            model=model,
-            extra_body={"chat_template_kwargs": {"reasoning_effort": "low"}}
-        )
+    # 调用API
+    response = client.chat.completions.create(
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        max_tokens=2048,
+        stream=False,
+        response_format={"type": "json_object"},
+        model=model,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}}
+    )
 
-        # 解析响应
-        content = response.choices[0].message.content or response.choices[0].message.model_extra["reasoning_content"]
+    # 解析响应
+    content = response.choices[0].message.content or response.choices[0].message.model_extra["reasoning_content"]
 
-        # 尝试解析JSON
-        text = str(content or "").strip()
-        text = re.sub(r"^(?:json)?\s*", "", text, flags=re.I)
-        text = re.sub(r"\s*$", "", text)
+    # 尝试解析JSON
+    text = str(content or "").strip()
+    text = re.sub(r"^(?:json)?\s*", "", text, flags=re.I)
+    text = re.sub(r"\s*$", "", text)
 
-        try:
-            value = json.loads(text)
-        except Exception:
-            raise ValueError(f"Failed to parse JSON response: {text[:100]}")
+    value = json.loads(text)
 
-        if not isinstance(value, dict) or set(value) != {"correct"} or not isinstance(value["correct"], bool):
-            raise ValueError("judge response is not strict correct:boolean JSON")
+    # 计算最终分数
+    score = 1.0 if value["correct"] else 0.0
 
-        # 计算最终分数
-        score = 1.0 if value["correct"] else 0.0
+    # 保存到缓存
+    save_to_cache(cache_key, score)
 
-        # 保存到缓存
-        save_to_cache(cache_key, score)
-
-        # 返回正确分数：正确为1.0，错误为0.0
-        return score
-
-    except Exception as e:
-        # 记录错误并返回默认值0.0
-        print(f"LLM judge error for question '{question}...': {e}")
-        return 0.0
-
+    # 返回正确分数：正确为1.0，错误为0.0
+    return score
 
 def batch_llm_judge(items_to_judge, model="GLM-5.3", max_concurrent=32, prompt_version="v1"):
     """
@@ -257,13 +243,23 @@ def batch_llm_judge(items_to_judge, model="GLM-5.3", max_concurrent=32, prompt_v
     def process_item(item):
         try:
             question = item.get("question", "")
-            return llm_judge_answer(
-                question=question,
-                prediction=item["prediction"],
-                reference=item["reference"],
-                model=model,
-                prompt_version=prompt_version
-            )
+            score = 0.0
+            for attempt in range(5):
+                try:
+                    score = llm_judge_answer(
+                        question=question,
+                        prediction=item["prediction"],
+                        reference=item["reference"],
+                        model=model,
+                        prompt_version=prompt_version
+                    )
+                    return score
+                except Exception as e:
+                    print(f"第 {attempt + 1} 次尝试失败: {e}")
+                    if attempt < 4:
+                        time.sleep(2)  # 失败后等待 1 秒再试
+                    else:
+                        return score
         except Exception as e:
             print(f"Error judging item: {e}")
             return 0.0  # 错误时默认0分
@@ -425,6 +421,14 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
         print(f"Warning: Token directory {token_dir} does not exist.")
 
     # 收集需要LLM判断的项目
+    question_id_2_question = {}
+    if "lme" in dataset_name.lower() or "longmemeval" in dataset_name.lower():
+        with open("../data/longmemeval_s_cleaned.json", "r", encoding="utf-8") as f:
+            all_questions = json.load(f)
+            for question in all_questions:
+                question_id_2_question[question["question_id"]] = question["question"]
+
+
     items_need_judge = []  # 存储需要判断的项目信息
     judge_item_positions = []  # 存储项目位置：(category_key, 其他信息用于更新统计)
 
@@ -450,6 +454,11 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
     if result_folder.exists():
         for file_path in result_folder.glob("**/*.json"):
             try:
+                file_name = file_path.stem
+                if "longmemeval" in file_path.parent.name:
+                    question_id = file_name.split("_", 1)[1]
+                    question = question_id_2_question[question_id]
+
                 with open(file_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
 
@@ -497,7 +506,7 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
 
                     # 总是收集项目进行LLM判断（缓存会避免重复计算）
                     items_need_judge.append({
-                        "question": item.get("question", ""),
+                        "question": question,
                         "prediction": pred,
                         "reference": ref,
                     })
@@ -509,7 +518,7 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
 
             except Exception as e:
                 ""
-                # print(f"Error reading result file {file_path}: {e}")
+                print(f"Error reading result file {file_path}: {e}")
     else:
         print(f"Warning: Result directory {result_dir} does not exist.")
 
@@ -644,16 +653,16 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
 
 if __name__ == "__main__":
     tasks = [
-        (
-            "./token_consumption_build_memory_locomo_fusionrag/",
-            "./lightmem_locomo_results_fusionrag",
-            "locomo",
-        ),
-        (
-            "./token_consumption_build_memory_locomo_event_fusionrag/",
-            "./lightmem_locomo_results_event_fusionrag",
-            "locomo",
-        ),
+        # (
+        #     "./token_consumption_build_memory_locomo_fusionrag/",
+        #     "./lightmem_locomo_results_fusionrag",
+        #     "locomo",
+        # ),
+        # (
+        #     "./token_consumption_build_memory_locomo_event_fusionrag/",
+        #     "./lightmem_locomo_results_event_fusionrag",
+        #     "locomo",
+        # ),
 
         # (
         #     "./token_consumption_build_memory_locomo/",
@@ -700,21 +709,21 @@ if __name__ == "__main__":
         #     "./lightmem_longmemeval_results_GLM-4.5-Air",
         #     "lme_lightmem_GLM-4.5-Air",
         # ),
-        # (
-        #     "./token_consumption_build_memory_longmemeval_event_GLM-4.5-Air",
-        #     "./lightmem_longmemeval_results_event_GLM-4.5-Air",
-        #     "lme_structsmem_GLM-4.5-Air",
-        # ),
-        # (
-        #     "./token_consumption_build_memory_longmemeval_Kimi-K2.6",
-        #     "./lightmem_longmemeval_results_Kimi-K2.6",
-        #     "lme_lightmem_kimi-K2.6",
-        # ),
-        # (
-        #     "./token_consumption_build_memory_longmemeval_event_Kimi-K2.6",
-        #     "./lightmem_longmemeval_results_event_Kimi-K2.6",
-        #     "lme_structmem_kimi-K2.6",
-        # ),
+        (
+            "./token_consumption_build_memory_longmemeval_event_GLM-4.5-Air",
+            "./lightmem_longmemeval_results_event_GLM-4.5-Air",
+            "lme_structsmem_GLM-4.5-Air",
+        ),
+        (
+            "./token_consumption_build_memory_longmemeval_Kimi-K2.6",
+            "./lightmem_longmemeval_results_Kimi-K2.6",
+            "lme_lightmem_kimi-K2.6",
+        ),
+        (
+            "./token_consumption_build_memory_longmemeval_event_Kimi-K2.6",
+            "./lightmem_longmemeval_results_event_Kimi-K2.6",
+            "lme_structmem_kimi-K2.6",
+        ),
 
         # (
         #     "./token_consumption_build_memory_halumem_event",

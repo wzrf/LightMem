@@ -661,6 +661,10 @@ def initialize_time_pointer(retriever, call_id, logger):
         with_payload=True,
         with_vectors=False
     )
+    all_unconsolidated = [
+        x for x in all_unconsolidated
+        if x.payload.get("float_time_stamp") is not None
+    ]
     if len(all_unconsolidated) == 0:
         logger.info(f"[{call_id}] No unconsolidated entries")
         return None

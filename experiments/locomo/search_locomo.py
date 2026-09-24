@@ -17,8 +17,8 @@ from lightmem.configs.text_embedder.base_config import BaseTextEmbedderConfig
 from prompts import ANSWER_PROMPT, ANSWER_PROMPT_StructMem, ANSWER_PROMPT_PREFIX
 from retrievers import QdrantEntryLoader, VectorRetriever, format_related_memories
 from llm_judge import evaluate_llm_judge
-from lightmem.fusionrag.run_question import FusionRAGModel
-from lightmem.fusionrag.sglang_kvcache import run_one_question_sglang
+from fusionrag_search.run_question import FusionRAGModel
+from fusionrag_search.run_question import generate_response_with_fusionrag
 
 os.environ["OMP_NUM_THREADS"] = "4"
 
@@ -37,77 +37,6 @@ fusion_rag_model = FusionRAGModel(
             apikey="xxx",
             use_local_draft_model=False,
         )
-
-
-def generate_response_with_fusionrag(
-        system_prompt: str,
-        prefix: str,
-        fusionrag_cache_list: list[str],
-        query_prompt: str,
-        model: str = "qwen3-8b",
-        max_tokens=5000,
-        recomputation_rate=0.3,
-        sglang_url="http://127.0.0.1:30003/v1/completions",
-        sglang_url_prefiller="http://127.0.0.1:30003/v1/completions"
-) -> Optional[str]:
-
-    if "kimi" in model.lower():
-        template = {
-            "DEFAULT_SYSTEM_PROMPT": f"""<|im_system|>system<|im_middle|>\n{system_prompt}\n{prefix}""",
-            "USER_PROMPT": f"""<|im_end|><|im_user|>user<|im_middle|>{query_prompt}<|im_end|><|im_assistant|>assistant<|im_middle|><think></think> Answer:"""
-        }
-    else: ## default: qwen
-        template = {
-            "DEFAULT_SYSTEM_PROMPT": f"""<|im_start|>system\n{system_prompt}\n{prefix}""",
-            "USER_PROMPT": f"""<|im_end|>\n<|im_start|>user\n\nQuestion: /no_think {query_prompt}<|im_end|>\n<|im_start|>assistant\nAnswer: </think>"""
-        }
-
-    time_start = time.time()
-    recompute_tokens, recompute_tokens_list, retrieved_docs, recompute_rate, sorted_doc_index, sorted_doc_index_before, _ = fusion_rag_model.draft_one_question(
-        template["DEFAULT_SYSTEM_PROMPT"],  ## DEFAULT_SYSTEM_PROMPT
-        fusionrag_cache_list,
-        template["USER_PROMPT"],
-        recomputation_rate,
-        "",
-        False,
-        False,
-        [],
-        False,
-        False,  ## if do preprocess
-        False,
-        True
-    )
-    print(f"draft_one_question time = {time.time() - time_start}")
-
-    try:
-        time_start = time.time()
-        content, usage, top_logprobs, real_recomputation_rate = run_one_question_sglang(
-            DEFAULT_SYSTEM_PROMPT=template["DEFAULT_SYSTEM_PROMPT"],
-            USER_PROMPT=template["USER_PROMPT"],
-            MODEL=model,
-            retrived_docs=fusionrag_cache_list,
-            max_tokens=max_tokens,  ## max tokens.
-            retrived_docs_relevant_docs=[],
-            recompute_tokens=recompute_tokens,
-            recompute_tokens_list=recompute_tokens_list,
-            max_workers=1,  ## max_workers.
-            recomputation_rate=recomputation_rate,
-            model_use=model,
-            endpoint_url=sglang_url,
-            prefiller_endpoint_url=sglang_url_prefiller,
-            method_keyword="",
-        )
-        print(f"run_one_question_sglang time: {time.time() - time_start}")
-
-        usage_info = {
-            "prompt_tokens": usage["prompt_tokens"],
-            "completion_tokens": usage["completion_tokens"],
-            "total_tokens": usage["total_tokens"],
-        }
-
-        return content, usage_info
-    except Exception as e:
-        print(e)
 
 # ============ Configuration ============
 LOGS_ROOT = "./logs"
@@ -660,7 +589,8 @@ def process_sample(
                 token_usage["total_tokens"] = 0
             elif os.getenv("FUSIONRAG", "").lower() == "true":
                 fusionrag_list.insert(0, prefix)
-                generated_answer, usage_info = generate_response_with_fusionrag(
+                generated_answer, usage_info, _ = generate_response_with_fusionrag(
+                    fusion_rag_model=fusion_rag_model,
                     system_prompt="You are an QA Expert.",
                     prefix="",
                     fusionrag_cache_list=fusionrag_list,
@@ -669,6 +599,7 @@ def process_sample(
                     sglang_url=llm_base_url + "/completions",
                     sglang_url_prefiller=llm_base_url + "/completions",
                     max_tokens=50,
+                    must_choose_docs=[0],
                 )
                 token_usage["prompt_tokens"] = usage_info["prompt_tokens"]
                 token_usage["completion_tokens"] = usage_info["completion_tokens"]

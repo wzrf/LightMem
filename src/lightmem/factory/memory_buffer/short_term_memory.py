@@ -23,7 +23,7 @@ class ShortMemBufferManager:
         if self.tokenizer is None:
             return len(text)
         elif hasattr(self.tokenizer, "encode"):
-            return len(self.tokenizer.encode(text))
+            return len(self.tokenizer.encode(text, disallowed_special=()))
         elif isinstance(self.tokenizer, str):
             raise ValueError(
                 f"Tokenizer as model_name '{self.tokenizer}' not supported directly. "
