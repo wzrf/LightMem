@@ -475,11 +475,14 @@ class LightMemory:
             
             if offline_update_trigger:
                 self.logger.info(f"[{call_id}] Triggering offline update for all entries")
-                self.offline_update_all_entries(
-                    update_sim_threshold = 0.8
-                )
+                try:
+                    self.offline_update_all_entries(
+                        update_sim_threshold = 0.8
+                    )
+                except Exception as e:
+                    print(f"[{call_id}] Exception: {e}")
 
-    def construct_update_queue_all_entries(self, top_k: int = 20, keep_top_n: int = 10, max_workers: int = 8):
+    def construct_update_queue_all_entries(self, top_k: int = 20, keep_top_n: int = 10, max_workers: int = 2):
 
         """
         Offline update all entries in parallel using multithreading.
@@ -493,7 +496,9 @@ class LightMemory:
         call_id = f"construct_queue_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
         self.logger.info(f"========== START {call_id} ==========")
         self.logger.info(f"[{call_id}] Parameters: top_k={top_k}, keep_top_n={keep_top_n}, max_workers={max_workers}")
+        time_start = time.time()
         all_entries = self.embedding_retriever.get_all()
+        print(f"construct_update_queue_all_entries get all entries in {time.time() - time_start}s")
         self.logger.info(f"[{call_id}] Retrieved {len(all_entries)} entries from vector database")
         if not all_entries:
             self.logger.warning(f"[{call_id}] No entries found in database, skipping queue construction")
@@ -518,11 +523,13 @@ class LightMemory:
                     skipped_count += 1
                 return
 
+            time_start = time.time()
             hits = self.embedding_retriever.search(
                 query_vector=vec,
                 limit=top_k,
                 filters={"float_time_stamp": {"lte": ts}}
             )
+            # print(f"searchs queue takes {time.time() - time_start} seconds")
 
             candidates = []
             for h in hits:
@@ -546,15 +553,18 @@ class LightMemory:
                     empty_queue_count += 1
                 self.logger.debug(f"[{call_id}] Entry {eid} has no candidates after filtering (hits may be only itself)")
 
+            time_start = time.time()
             with write_lock:
                 self.embedding_retriever.update(vector_id=eid, vector=vec, payload=new_payload)
 
+            # print(f"updated queue takes {time.time() - time_start} seconds")
             with lock:
                 updated_count += 1
         self.logger.info(f"[{call_id}] Starting parallel queue construction with {max_workers} workers")
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        time_start = time.time()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
             executor.map(_update_queue_construction, all_entries)
+        print(f"parallel queue construction completed in {time.time() - time_start} seconds, all_entries={len(all_entries)}")
         self.logger.info(
             f"[{call_id}] Queue construction completed: {updated_count} updated, {skipped_count} skipped, "
             f"nonempty_queues={nonempty_queue_count}, empty_queues={empty_queue_count}"

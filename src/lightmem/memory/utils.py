@@ -266,12 +266,12 @@ def convert_extraction_results_to_memory_entries(
                 
                 if max_valid_sid is not None and sid > max_valid_sid:
                     sid = max_valid_sid  
-                    logger.warning(
-                        f"LLM returned invalid source_id={original_sid} "
-                        f"(valid range: [0, {max_valid_sid}]) in batch {batch_idx}. "
-                        f"Auto-corrected to source_id={sid}. "
-                        f"Fact: {fact_entry.get('fact', '')[:100]}..."
-                    )
+                    # logger.warning(
+                    #     f"LLM returned invalid source_id={original_sid} "
+                    #     f"(valid range: [0, {max_valid_sid}]) in batch {batch_idx}. "
+                    #     f"Auto-corrected to source_id={sid}. "
+                    #     f"Fact: {fact_entry.get('fact', '')[:100]}..."
+                    # )
                 
                 seq_candidate = sid * 2
                 
@@ -333,6 +333,8 @@ def _create_memory_entry_from_fact(
     sequence_n = source_id * 2
 
     try:
+        if sequence_n >= len(timestamps_list):
+            sequence_n = len(timestamps_list) - 1
         time_stamp = timestamps_list[sequence_n]
         
         if not isinstance(time_stamp, float):
@@ -472,6 +474,8 @@ def retrieve_supplementary_entries(
             seen_ids.add(seed["id"])
             seed_ts = seed["payload"]["time_stamp"] 
             logger.debug(f"[Retrieve] Seed entry found: {seed_ts}")
+            if seed_ts is None:
+                continue
             
             same_time_entries_raw, _ = retriever.scroll(  
                 scroll_filter={"time_stamp": seed_ts},
@@ -485,8 +489,14 @@ def retrieve_supplementary_entries(
                     })
                     seen_ids.add(other.id)
                     logger.debug(f"[Retrieve]   └─ Associated entry added: {other.payload['time_stamp']}")
-                    
-    supplementary_entries.sort(key=lambda e: e["payload"]["float_time_stamp"])
+
+    supplementary_entries.sort(
+        key=lambda e: (
+            (e.get("payload") or {}).get("float_time_stamp")
+            if (e.get("payload") or {}).get("float_time_stamp") is not None
+            else -float("inf")
+        )
+    )
     logger.debug(
         f"After event reconstruction: {len(supplementary_entries)} entries "
         f"({len(seed_entries)} seeds → {len(supplementary_entries)} total)"

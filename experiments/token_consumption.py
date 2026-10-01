@@ -12,6 +12,17 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from openai import OpenAI
 
+from lightmem.memory.prompts import EXTRACTION_PROMPTS
+from lightmem.memory.prompts import METADATA_GENERATE_PROMPT, UPDATE_PROMPT, METADATA_GENERATE_PROMPT_locomo
+
+LoCoMo_Cross_Event_Consolidation_prefix = """
+You are a professional conversation summarization assistant. 
+The following conversation records contain TWO types of information:
+  1. **Factual information**: concrete events, plans, opinions, preferences
+  2. **Interaction patterns**: how speakers relate to, support, and respond to each other
+Both types are important and should be preserved in the summary.
+"""
+
 
 def simple_tokenize(text):
     """简单的分词与文本清洗函数（用于计算 F1）"""
@@ -255,8 +266,9 @@ def batch_llm_judge(items_to_judge, model="GLM-5.3", max_concurrent=32, prompt_v
                     )
                     return score
                 except Exception as e:
-                    print(f"第 {attempt + 1} 次尝试失败: {e}")
-                    if attempt < 4:
+                    if attempt > 3:
+                        print(f"第 {attempt + 1} 次尝试失败: {e}")
+                    if attempt < 5:
                         time.sleep(2)  # 失败后等待 1 秒再试
                     else:
                         return score
@@ -264,7 +276,8 @@ def batch_llm_judge(items_to_judge, model="GLM-5.3", max_concurrent=32, prompt_v
             print(f"Error judging item: {e}")
             return 0.0  # 错误时默认0分
 
-    # 使用线程池并发处理
+    from tqdm import tqdm
+
     with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
         # 提交所有任务
         future_to_item = {
@@ -272,8 +285,12 @@ def batch_llm_judge(items_to_judge, model="GLM-5.3", max_concurrent=32, prompt_v
             for idx, item in enumerate(items_to_judge)
         }
 
-        # 按完成顺序收集结果
-        for future in as_completed(future_to_item):
+        # 使用 tqdm 包裹 as_completed，并设定 total 参数
+        for future in tqdm(
+                as_completed(future_to_item),
+                total=len(future_to_item),
+                desc="Processing items",
+        ):
             idx = future_to_item[future]
             try:
                 result = future.result()
@@ -388,10 +405,28 @@ def parse_halumem_results(data):
 def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
     token_folder = Path(token_dir)
     result_folder = Path(result_dir)
+    if "qwen" in dataset_name.lower():
+        model_path = "/mnt/qjhs-sh-lab-01/models/Qwen3-8B/"
+    elif "glm" in dataset_name.lower():
+        model_path = "/mnt/qjhs-sh-lab-04/models/GLM-4.5-Air"
+    elif "kimi" in dataset_name.lower():
+        model_path = "/mnt/qjhs-sh-lab-01/models/Kimi-K2.6"
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    if "locomo" in dataset_name.lower():
+        add_memory_flat_len = len(tokenizer.tokenize(METADATA_GENERATE_PROMPT_locomo))
+    else:
+        add_memory_flat_len = len(tokenizer.tokenize(METADATA_GENERATE_PROMPT))
+    add_memory_event_len = len(tokenizer.tokenize(EXTRACTION_PROMPTS["event"]["factual"])) +  len(tokenizer.tokenize(EXTRACTION_PROMPTS["event"]["relational"]))
+    add_memory_event_len /= 2 ## average each.
+    update_len = len(tokenizer.tokenize(UPDATE_PROMPT))
+    summarize_len = len(tokenizer.tokenize(METADATA_GENERATE_PROMPT))
+
 
     # 1. 统计 Token 消耗
     all_prompt_tokens = []
     all_completion_tokens = []
+    all_prefix_tokens = []
 
     if token_folder.exists():
         for file in token_folder.glob("*.json"):
@@ -401,12 +436,25 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
 
                 prompt_tokens = 0
                 completion_tokens = 0
+                prefix_len = 0
 
                 if "llm" in data and isinstance(data["llm"], dict):
-                    for item in data["llm"].values():
+                    for key, item in data["llm"].items():
                         if isinstance(item, dict):
                             prompt_tokens += item.get("prompt_tokens", 0)
                             completion_tokens += item.get("completion_tokens", 0)
+
+                            calls = item["calls"]
+                            if key == "update":
+                                prefix_len += calls * update_len
+                            elif key == "summarize":
+                                prefix_len += calls * summarize_len
+                            elif key == "add_memory":
+                                if "event" in token_dir:
+                                    prefix_len += calls * add_memory_event_len
+                                else:
+                                    prefix_len += calls * add_memory_flat_len
+
                 else:
                     prompt_tokens = data.get("prompt_tokens", 0)
                     completion_tokens = data.get("completion_tokens", 0)
@@ -415,7 +463,11 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
                     all_prompt_tokens.append(prompt_tokens)
                 if completion_tokens > 0:
                     all_completion_tokens.append(completion_tokens)
+                if prefix_len > 0:
+                    all_prefix_tokens.append(prefix_len)
             except Exception as e:
+                import traceback
+                traceback.print_exc()
                 print(f"Error reading token file {file}: {e}")
     else:
         print(f"Warning: Token directory {token_dir} does not exist.")
@@ -455,9 +507,6 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
         for file_path in result_folder.glob("**/*.json"):
             try:
                 file_name = file_path.stem
-                if "longmemeval" in file_path.parent.name:
-                    question_id = file_name.split("_", 1)[1]
-                    question = question_id_2_question[question_id]
 
                 with open(file_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
@@ -505,6 +554,11 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
                     metrics_by_category[cat_key]["judge_correct"].append(None)
 
                     # 总是收集项目进行LLM判断（缓存会避免重复计算）
+                    if "longmemeval" in file_path.parent.name:
+                        question_id = file_name.split("_", 1)[1]
+                        question = question_id_2_question[question_id]
+                    else:
+                        question = item["question"]
                     items_need_judge.append({
                         "question": question,
                         "prediction": pred,
@@ -556,13 +610,17 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
 
     # 4. 打印结果
     avg_prompt = np.mean(all_prompt_tokens) if all_prompt_tokens else 0.0
+    avg_prompt_without_prefix = np.mean(all_prompt_tokens) - np.mean(all_prefix_tokens)
     avg_comp = (
         np.mean(all_completion_tokens) if all_completion_tokens else 0.0
     )
 
-    print(f"\n================ [{dataset_name}] Summary ================")
+    print(
+        f"\033[33m\n================ [{dataset_name}] Summary ================\033[0m"
+    )
     print(
         f"[Build] Average Prompt Tokens    : {avg_prompt:.2f}\n"
+        f"[Build] Average Prompt Tokens WITHOUT PREFIX    : {avg_prompt_without_prefix:.2f} all_prefix_tokens len={len(all_prefix_tokens)}\n"
         f"[Build] Average Completion Tokens: {avg_comp:.2f}"
     )
 
@@ -580,6 +638,7 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
         build_memory_completion_avg = sum(build_memory_completion_tokens) / len(build_memory_completion_tokens)
 
         print(
+            f"[Build Memory] Case numbers    : {len(build_memory_prompt_tokens)}\n"
             f"[Build Memory] Average Prompt Tokens    : {build_memory_prompt_avg:.2f}\n"
             f"[Build Memory] Average Completion Tokens: {build_memory_completion_avg:.2f}"
         )
@@ -664,31 +723,31 @@ if __name__ == "__main__":
         #     "locomo",
         # ),
 
-        # (
-        #     "./token_consumption_build_memory_locomo/",
-        #     "./lightmem_locomo_results",
-        #     "locomo_lightmem_qwen3",
-        # ),
+        (
+            "./token_consumption_build_memory_locomo/",
+            "./lightmem_locomo_results",
+            "locomo_lightmem_qwen3",
+        ),
         # (
         #     "./token_consumption_build_memory_locomo_event/",
         #     "./lightmem_locomo_results_event",
         #     "locomo_structmem_qwen3",
         # ),
-        # (
-        #     "./token_consumption_build_memory_locomo_GLM-4.5-Air",
-        #     "./lightmem_locomo_results_GLM-4.5-Air",
-        #     "locomo_lightmem_GLM-4.5-Air",
-        # ),
+        (
+            "./token_consumption_build_memory_locomo_GLM-4.5-Air",
+            "./lightmem_locomo_results_GLM-4.5-Air",
+            "locomo_lightmem_GLM-4.5-Air",
+        ),
         # (
         #     "./token_consumption_build_memory_locomo_event_GLM-4.5-Air",
         #     "./lightmem_locomo_results_event_GLM-4.5-Air",
         #     "locomo_Structmem_GLM-4.5-Air",
         # ),
-        # (
-        #     "./token_consumption_build_memory_locomo_Kimi-K2.6",
-        #     "./lightmem_locomo_results_Kimi-K2.6",
-        #     "locomo_lightmem_Kimi-K2.6",
-        # ),
+        (
+            "./token_consumption_build_memory_locomo_Kimi-K2.6",
+            "./lightmem_locomo_results_Kimi-K2.6",
+            "locomo_lightmem_Kimi-K2.6",
+        ),
         # (
         #     "./token_consumption_build_memory_locomo_event_Kimi-K2.6",
         #     "./lightmem_locomo_results_event_Kimi-K2.6",
@@ -709,27 +768,53 @@ if __name__ == "__main__":
         #     "./lightmem_longmemeval_results_GLM-4.5-Air",
         #     "lme_lightmem_GLM-4.5-Air",
         # ),
-        (
-            "./token_consumption_build_memory_longmemeval_event_GLM-4.5-Air",
-            "./lightmem_longmemeval_results_event_GLM-4.5-Air",
-            "lme_structsmem_GLM-4.5-Air",
-        ),
-        (
-            "./token_consumption_build_memory_longmemeval_Kimi-K2.6",
-            "./lightmem_longmemeval_results_Kimi-K2.6",
-            "lme_lightmem_kimi-K2.6",
-        ),
-        (
-            "./token_consumption_build_memory_longmemeval_event_Kimi-K2.6",
-            "./lightmem_longmemeval_results_event_Kimi-K2.6",
-            "lme_structmem_kimi-K2.6",
-        ),
-
         # (
-        #     "./token_consumption_build_memory_halumem_event",
-        #     "./lightmem_halumem_results",
-        #     "halumem",
+        #     "./token_consumption_build_memory_longmemeval_event_GLM-4.5-Air",
+        #     "./lightmem_longmemeval_results_event_GLM-4.5-Air",
+        #     "lme_structsmem_GLM-4.5-Air",
         # ),
+        # (
+        #     "./token_consumption_build_memory_longmemeval_Kimi-K2.6",
+        #     "./lightmem_longmemeval_results_Kimi-K2.6",
+        #     "lme_lightmem_kimi-K2.6",
+        # ),
+        # (
+        #     "./token_consumption_build_memory_longmemeval_event_Kimi-K2.6",
+        #     "./lightmem_longmemeval_results_event_Kimi-K2.6",
+        #     "lme_structmem_kimi-K2.6",
+        # ),
+
+    #     (
+    #         "./token_consumption_build_memory_halumem",
+    #         "./lightmem_halumem_results",
+    #         "halumem_lightmem_qwen3-8B",
+    #     ),
+    #     (
+    #         "./token_consumption_build_memory_halumem_event",
+    #         "./lightmem_halumem_results_event",
+    #         "halumem_structmem_qwen3-8B",
+    #     ),
+    #     (
+    #         "./token_consumption_build_memory_halumem",
+    #         "./lightmem_halumem_results_GLM-4.5-Air/",
+    #         "halumem_lightmem_GLM",
+    #     ),
+    #     (
+    #         "./token_consumption_build_memory_halumem_event_GLM-4.5-Air",
+    #         "./lightmem_halumem_results_event_GLM-4.5-Air",
+    #         "halumem_structmem_GLM",
+    #     ),
+    #     #
+    #     (
+    #         "./token_consumption_build_memory_halumem_Kimi-K2.6",
+    #         "./lightmem_halumem_results_Kimi-K2.6",
+    #         "halumem_lightmem_Kimi",
+    #     ),
+    #     (
+    #         "./token_consumption_build_memory_halumem_event_Kimi-K2.6",
+    #         "./lightmem_halumem_results_event_Kimi-K2.6",
+    #         "halumem_structmem_Kimi",
+    #     ),
     ]
 
     for token_path, result_path, name in tasks:

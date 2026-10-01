@@ -9,12 +9,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from openai import OpenAI
 from multiprocessing import Pool
 import sys
+from tqdm import tqdm
 
 # 从 lightmem 框架导入 LightMemory
 from lightmem.memory.lightmem import LightMemory
 
 # ============================================================================
-# API 配置与模型参数
+# API 配置与模型参数 (默认值，会被命令行参数覆盖)
 # ============================================================================
 
 JUDGE_MODEL_API_KEY = os.environ.get('JUDGE_API_KEY', 'sk-11ce7640e46049a6977c0d96ba855ffb')
@@ -28,7 +29,8 @@ LLM_MODEL = os.environ.get('LLM_MODEL', 'qwen3-8b')
 LLMLINGUA_MODEL_PATH = os.environ.get('LLMLINGUA_MODEL_PATH', '/mnt/qjhs-sh-lab-01/models/llmlingua-2-bert-base-multilingual-cased-meetingbank')
 EMBEDDING_MODEL_PATH = os.environ.get('EMBEDDING_MODEL_PATH', '/mnt/qjhs-sh-lab-01/models/all-MiniLM-L6-v2')
 
-
+os.environ["OMP_NUM_THREADS"] = "4"
+os.environ["OPENBLAS_NUM_THREADS"] = "2"
 # ============================================================================
 # HaluMem 数据结构与 JSONL 加载器
 # ============================================================================
@@ -202,7 +204,8 @@ def calculate_simple_f1(prediction: str, reference: str) -> float:
 # LightMemory 工厂函数
 # ============================================================================
 
-def build_lightmem_instance(collection_name: str, qdrant_dir: str, extraction_mode: str = "flat") -> LightMemory:
+def build_lightmem_instance(collection_name: str, qdrant_dir: str, extraction_mode: str = "flat",
+                           compressor=None, embedder=None) -> LightMemory:
     config = {
         "pre_compress": True,
         "pre_compressor": {
@@ -210,7 +213,7 @@ def build_lightmem_instance(collection_name: str, qdrant_dir: str, extraction_mo
             "configs": {
                 "llmlingua_config": {
                     "model_name": LLMLINGUA_MODEL_PATH,
-                    "device_map": "cuda",
+                    "device_map": "cuda:4",
                     "use_llmlingua2": True,
                 },
             }
@@ -220,7 +223,7 @@ def build_lightmem_instance(collection_name: str, qdrant_dir: str, extraction_mo
         "topic_segmenter": {
             "model_name": "llmlingua-2",
         },
-        "messages_use": "user_only",
+        "messages_use": "user_only", ##hybrid
         "metadata_generate": True,
         "text_summary": True,
         "memory_manager": {
@@ -239,7 +242,7 @@ def build_lightmem_instance(collection_name: str, qdrant_dir: str, extraction_mo
             "configs": {
                 "model": EMBEDDING_MODEL_PATH,
                 "embedding_dims": 384,
-                "model_kwargs": {"device": "cuda"},
+                "model_kwargs": {"device": "cuda:4"},
             },
         },
         "retrieve_strategy": "embedding",
@@ -249,7 +252,7 @@ def build_lightmem_instance(collection_name: str, qdrant_dir: str, extraction_mo
                 "collection_name": collection_name,
                 "embedding_model_dims": 384,
                 "path": os.path.join(qdrant_dir, collection_name),
-                "on_disk": True,
+                "on_disk": False,
             }
         },
         "update": "offline",
@@ -263,12 +266,12 @@ def build_lightmem_instance(collection_name: str, qdrant_dir: str, extraction_mo
                     "collection_name": f"{collection_name}_summary",
                     "embedding_model_dims": 384,
                     "path": os.path.join(qdrant_dir, f"{collection_name}_summary"),
-                    "on_disk": True,
+                    "on_disk": False,
                 }
             },
             "extraction_mode": extraction_mode
         }
-    return LightMemory.from_config(config)
+    return LightMemory.from_config_with_compressor_embedder(config, compressor, embedder)
 
 
 # ============================================================================
@@ -277,31 +280,40 @@ def build_lightmem_instance(collection_name: str, qdrant_dir: str, extraction_mo
 
 class HaluMemLightMemTester:
     def __init__(self, use_llm_judge: bool = False, extraction_mode: str = "flat",
-                 qdrant_dir: str = "./qdrant_data"):
+                 qdrant_dir: str = "./qdrant_data", token_consumption_dir: str = "./token_consumption_halumem",
+                 compressor=None, embedder=None):
         self.use_llm_judge = use_llm_judge
         self.extraction_mode = extraction_mode
         self.qdrant_dir = qdrant_dir
+        self.token_consumption_dir = token_consumption_dir
         self.llm = LLMModel(LLM_MODEL, API_KEY, API_BASE_URL)
         if use_llm_judge:
             self.judge_client = LLMModel(JUDGE_MODEL, JUDGE_MODEL_API_KEY, JUDGE_MODEL_BASE_URL)
         else:
             self.judge_client = None
+        self.compressor = compressor
+        self.embedder = embedder
 
-    def run_single_sample(self, sample: HaluMemSample, sample_idx: int, save_dir: str = "./results_lightmem_halumem"):
+    def run_single_sample(self, sample: HaluMemSample, sample_idx: int, save_dir: str = "./results_lightmem_halumem", enable_summary: bool = False):
         safe_sample_id = sample.sample_id.replace(" ", "_")
         collection_name = f"halumem_{safe_sample_id[:20]}"
 
         # 初始化 LightMemory
-        lightmem = build_lightmem_instance(collection_name, self.qdrant_dir, self.extraction_mode)
+        lightmem = build_lightmem_instance(collection_name, self.qdrant_dir, self.extraction_mode,
+                                           self.compressor, self.embedder)
 
         sample_results = []
         accumulated_history_turns = 0
         total_build_prompt_tokens = 0
         total_build_completion_tokens = 0
 
+        ##mengyao_debug fixme!!
+        # sample.sessions = sample.sessions[:5]
+
+        total_sessions = len(sample.sessions)
         # 遍历各个 session
         for s_idx, session in enumerate(sample.sessions):
-            print(f"running {sample_idx} {s_idx}/{len(sample.sessions)}")
+            print(f"running sample [{sample_idx}] session {s_idx}/{len(sample.sessions)}")
             dialogue_turns = session.get("dialogue", [])
             questions = session.get("questions", [])
 
@@ -321,14 +333,25 @@ class HaluMemLightMemTester:
                 turn_messages[1]["time_stamp"] = format_timestamp_for_lightmem(turn_messages[1]["timestamp"])
 
                 is_last_turn = turn_idx == num_turns - 1
-                if is_last_turn:
-                    print("last turn")
+                # if is_last_turn:
+                #     print("last turn")
                 lightmem.add_memory(
                     messages=turn_messages,
                     force_segment=is_last_turn,
                     force_extract=is_last_turn
                 )
                 turns_added_count += 1
+
+            if enable_summary:
+                summary_result = lightmem.summarize(
+                    retrieval_scope="global",
+                    time_window=3600,  ## summary_time_window
+                    top_k_seeds=15,  ## summary_top_k_seeds
+                    process_all=True
+                )
+
+            lightmem.construct_update_queue_all_entries()
+            lightmem.offline_update_all_entries(score_threshold=0.9)
 
             accumulated_history_turns += turns_added_count
 
@@ -345,6 +368,14 @@ class HaluMemLightMemTester:
 
             total_build_prompt_tokens = turn_build_prompt_tokens_after
             total_build_completion_tokens = turn_build_completion_tokens_after
+
+            # 如果是最后一个session，保存构建阶段的token消耗统计
+            if s_idx == total_sessions - 1:
+                os.makedirs(self.token_consumption_dir, exist_ok=True)
+                token_stats = lightmem.get_token_statistics()
+                token_file = os.path.join(self.token_consumption_dir, f"{safe_sample_id}.json")
+                with open(token_file, 'w', encoding='utf-8') as f:
+                    json.dump(token_stats, f, indent=2, ensure_ascii=False)
 
             # ----------------------------------------------------------------
             # 步骤 2：对当前 Session 内的问题进行检索与回答
@@ -382,9 +413,12 @@ class HaluMemLightMemTester:
                 llm_judge_score = 0.0
 
                 if self.use_llm_judge and self.judge_client:
-                    judge_prompt = get_anscheck_prompt(question, reference, generated_answer)
-                    judge_response = self.judge_client.call([{"role": "user", "content": judge_prompt}])
-                    llm_judge_score = 1.0 if parse_llm_judge_response(judge_response) else 0.0
+                    try:
+                        judge_prompt = get_anscheck_prompt(question, reference, generated_answer)
+                        judge_response = self.judge_client.call([{"role": "user", "content": judge_prompt}])
+                        llm_judge_score = 1.0 if parse_llm_judge_response(judge_response) else 0.0
+                    except Exception as e:
+                        ""
 
                 metrics = {
                     "f1": f1_score,
@@ -440,6 +474,7 @@ class HaluMemLightMemTester:
             with open(f"{save_dir}/{safe_sample_id}.json", 'w', encoding='utf-8') as f:
                 json.dump(sample_results, f, indent=2, ensure_ascii=False)
 
+
         avg_f1 = sum(r['metrics']['f1'] for r in sample_results) / len(sample_results) if sample_results else 0
         print(f"[{sample_idx}] Sample ID: {safe_sample_id} | Queries: {len(sample_results)} | Avg F1: {avg_f1:.3f}")
         return sample_results
@@ -450,13 +485,16 @@ class HaluMemLightMemTester:
 # ============================================================================
 
 def _worker(args_tuple):
-    idx, sample, args = args_tuple
+    idx, sample, args, compressor, embedder = args_tuple
     tester = HaluMemLightMemTester(
         use_llm_judge=args.llm_judge,
         extraction_mode=args.extraction_mode,
-        qdrant_dir=args.qdrant_dir
+        qdrant_dir=args.qdrant_dir,
+        token_consumption_dir=args.token_consumption_dir,
+        compressor=compressor,
+        embedder=embedder
     )
-    return tester.run_single_sample(sample, idx, save_dir=args.output_dir)
+    return tester.run_single_sample(sample, idx, save_dir=args.output_dir, enable_summary=args.enable_summary)
 
 
 # ============================================================================
@@ -464,6 +502,8 @@ def _worker(args_tuple):
 # ============================================================================
 
 def main():
+    global API_KEY, API_BASE_URL, LLM_MODEL
+
     parser = argparse.ArgumentParser(description='Run LightMem on HaluMem dataset')
     parser.add_argument('--dataset', type=str, default='../../data/HaluMem-Medium.jsonl',
                         help='Path to HaluMem jsonl file or directory')
@@ -474,32 +514,100 @@ def main():
                         help='Directory to save evaluation results')
     parser.add_argument('--qdrant-dir', type=str, default='./qdrant_data_halumem',
                         help='Directory to store Qdrant database files')
+    parser.add_argument('--token-consumption-dir', type=str, default='../token_consumption_build_memory_halumem',
+                        help='Directory to save token consumption statistics')
+    parser.add_argument('--LLM_MODEL', type=str,
+                        help='LLM model name (e.g., qwen3-8b, GLM-4.5-Air, Kimi-K2.6)')
+    parser.add_argument('--API_KEY', type=str,
+                        help='API key for LLM')
+    parser.add_argument('--API_BASE_URL', type=str,
+                        help='API base URL for LLM')
+    parser.add_argument('--compressor_device', type=str, default="cpu",
+                        help='Device for compressor (cpu/cuda)')
+    parser.add_argument('--embedder_device', type=str, default="cpu",
+                        help='Device for embedder (cpu/cuda)')
+    parser.add_argument('--FUSIONRAG', action='store_true',
+                        help='Enable FusionRAG mode')
+    parser.add_argument('--enable_summary', action='store_true',  ##mengyao_debug: summary=structmem
+                       help='Whether to generate summaries')
+    parser.add_argument('--max-workers', type=int, default=None,
+                       help='Maximum number of workers (default: 20, or 1 if DEBUG=1)')
     args = parser.parse_args()
+
+    # 根据参数覆盖全局变量
+    if args.API_KEY:
+        API_KEY = args.API_KEY
+    if args.API_BASE_URL:
+        API_BASE_URL = args.API_BASE_URL
+    if args.LLM_MODEL:
+        LLM_MODEL = args.LLM_MODEL
+
+    # 构建 post_tag 后缀
+    post_tag = ""
+    if args.extraction_mode == "event":
+        post_tag = "_event"
+
+    if args.FUSIONRAG or os.getenv("FUSIONRAG", "").lower() == "true":
+        post_tag += "_fusionrag"
+
+    if LLM_MODEL.lower() != "qwen3-8b":
+        post_tag += f"_{LLM_MODEL}"
+
+    print(f"post_tag={post_tag} LLM_MODEL={LLM_MODEL}")
+
+    # 根据 post_tag 更新目录路径
+    if post_tag:
+        args.output_dir = f"{args.output_dir}{post_tag}"
+        args.qdrant_dir = f"{args.qdrant_dir}{post_tag}"
+        args.token_consumption_dir = f"{args.token_consumption_dir}{post_tag}"
+
+    # 创建 token 消耗统计目录
+    os.makedirs(args.token_consumption_dir, exist_ok=True)
+
+    print(f"output_dir={args.output_dir}")
+    print(f"qdrant_dir={args.qdrant_dir}")
+    print(f"token_consumption_dir={args.token_consumption_dir}")
 
     samples = load_halumem_dataset(args.dataset)
 
-    if args.extraction_mode == "event":
-        args.output_dir = f"{args.output_dir}_event"
-        args.qdrant_dir = f"{args.qdrant_dir}_event"
+    # 确定 max_workers 优先级: 命令行参数 > 环境变量 MAX_WORKERS > DEBUG=1 > 默认值
+    if args.max_workers is not None:
+        max_workers = args.max_workers
+    elif os.environ.get('MAX_WORKERS'):
+        max_workers = int(os.environ.get('MAX_WORKERS'))
+    else:
+        max_workers = 20
 
-    max_workers = 16
     if os.environ.get('DEBUG') == "1":
         max_workers = 1
+        samples = samples[14:15]
+
+    print(f"max_workers={max_workers}")
 
     # 打包任务参数传给全局 _worker
-    tasks = [(i, s, args) for i, s in enumerate(samples)]
+    from run_lightmem_qwen import load_compressor_and_embedder
+    compressor, embedder = load_compressor_and_embedder(device_c=args.compressor_device, device_e=args.embedder_device)
+    tasks = [(i, s, args, compressor, embedder) for i, s in enumerate(samples)]
 
     all_flattened_results = []
     try:
-        with Pool(processes=max_workers) as pool:
-            results = pool.map(_worker, tasks)
-            for sample_res in results:
-                if sample_res:
-                    all_flattened_results.extend(sample_res)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [
+                executor.submit(_worker, task)
+                for task in tasks
+            ]
+
+            for future in tqdm(as_completed(futures), total=len(futures)):
+                try:
+                    sample_res = future.result()
+                    if sample_res:
+                        all_flattened_results.extend(sample_res)
+                except Exception as e:
+                    from traceback import print_exc
+                    print_exc()
+                    print(f"\033[33m[Worker Error] {e}\033[0m")
     except KeyboardInterrupt:
-        print("\n[Ctrl+C] 收到中断信号，正在终止所有子进程...")
-        pool.terminate()
-        pool.join()
+        print("\n[Ctrl+C] 收到中断信号，正在终止线程池...")
         sys.exit(1)
 
     if all_flattened_results:

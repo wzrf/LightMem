@@ -122,7 +122,11 @@ class Qdrant:
                 lte = value.get("lte", None)
                 conditions.append(FieldCondition(key=key, range=Range(gte=gte, lte=lte)))
             else:
-                conditions.append(FieldCondition(key=key, match=MatchValue(value=value)))
+                try:
+                    conditions.append(FieldCondition(key=key, match=MatchValue(value=value)))
+                except Exception as e:
+                    print(f"\033[33m[Warning] {e}\033[0m filters={filters}")
+                    return None
         return Filter(must=conditions) if conditions else None
 
     def search(
@@ -173,8 +177,8 @@ class Qdrant:
             query=query_vector,
             query_filter=query_filter,
             limit=limit,
-            with_payload=True,
-            with_vectors=True, 
+            with_payload=return_full,
+            with_vectors=False,
         )
 
         results = []
@@ -325,6 +329,7 @@ class Qdrant:
         Returns:
             tuple: (points, next_offset) - List of points and offset for next page
         """
+        # print(f"scroll_filter = {scroll_filter}")
         if isinstance(scroll_filter, dict):
             scroll_filter = self._create_filter(scroll_filter)
         
