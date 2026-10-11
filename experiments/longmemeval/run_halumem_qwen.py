@@ -297,7 +297,7 @@ class HaluMemLightMemTester:
     def run_single_sample(self, sample: HaluMemSample, sample_idx: int, save_dir: str = "./results_lightmem_halumem", enable_summary: bool = False):
         safe_sample_id = sample.sample_id.replace(" ", "_")
         collection_name = f"halumem_{safe_sample_id[:20]}"
-
+        os.makedirs(self.token_consumption_dir, exist_ok=True)
         # 初始化 LightMemory
         lightmem = build_lightmem_instance(collection_name, self.qdrant_dir, self.extraction_mode,
                                            self.compressor, self.embedder)
@@ -369,13 +369,11 @@ class HaluMemLightMemTester:
             total_build_prompt_tokens = turn_build_prompt_tokens_after
             total_build_completion_tokens = turn_build_completion_tokens_after
 
-            # 如果是最后一个session，保存构建阶段的token消耗统计
-            if s_idx == total_sessions - 1:
-                os.makedirs(self.token_consumption_dir, exist_ok=True)
-                token_stats = lightmem.get_token_statistics()
-                token_file = os.path.join(self.token_consumption_dir, f"{safe_sample_id}.json")
-                with open(token_file, 'w', encoding='utf-8') as f:
-                    json.dump(token_stats, f, indent=2, ensure_ascii=False)
+            # 每一轮都保存，方便看结果
+            token_stats = lightmem.get_token_statistics()
+            token_file = os.path.join(self.token_consumption_dir, f"{safe_sample_id}.json")
+            with open(token_file, 'w', encoding='utf-8') as f:
+                json.dump(token_stats, f, indent=2, ensure_ascii=False)
 
             # ----------------------------------------------------------------
             # 步骤 2：对当前 Session 内的问题进行检索与回答
@@ -412,13 +410,13 @@ class HaluMemLightMemTester:
                 f1_score = calculate_simple_f1(generated_answer, reference)
                 llm_judge_score = 0.0
 
-                if self.use_llm_judge and self.judge_client:
-                    try:
-                        judge_prompt = get_anscheck_prompt(question, reference, generated_answer)
-                        judge_response = self.judge_client.call([{"role": "user", "content": judge_prompt}])
-                        llm_judge_score = 1.0 if parse_llm_judge_response(judge_response) else 0.0
-                    except Exception as e:
-                        ""
+                # if self.use_llm_judge and self.judge_client:
+                #     try:
+                #         judge_prompt = get_anscheck_prompt(question, reference, generated_answer)
+                #         judge_response = self.judge_client.call([{"role": "user", "content": judge_prompt}])
+                #         llm_judge_score = 1.0 if parse_llm_judge_response(judge_response) else 0.0
+                #     except Exception as e:
+                #         ""
 
                 metrics = {
                     "f1": f1_score,

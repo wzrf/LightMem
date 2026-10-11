@@ -427,6 +427,7 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
     all_prompt_tokens = []
     all_completion_tokens = []
     all_prefix_tokens = []
+    text_2_len = {}
 
     if token_folder.exists():
         for file in token_folder.glob("*.json"):
@@ -444,20 +445,33 @@ def process_eval_dataset(token_dir: str, result_dir: str, dataset_name: str):
                             prompt_tokens += item.get("prompt_tokens", 0)
                             completion_tokens += item.get("completion_tokens", 0)
 
-                            calls = item["calls"]
-                            if key == "update":
-                                prefix_len += calls * update_len
-                            elif key == "summarize":
-                                prefix_len += calls * summarize_len
-                            elif key == "add_memory":
-                                if "event" in token_dir:
-                                    prefix_len += calls * add_memory_event_len
-                                else:
-                                    prefix_len += calls * add_memory_flat_len
+                            ## mengyao_debug 第一种方法，预估
+                            if "call_record" not in data:
+                                calls = item["calls"]
+                                if key == "update":
+                                    prefix_len += calls * update_len
+                                elif key == "summarize":
+                                    prefix_len += calls * summarize_len
+                                elif key == "add_memory":
+                                    if "event" in token_dir:
+                                        prefix_len += calls * add_memory_event_len
+                                    else:
+                                        prefix_len += calls * add_memory_flat_len
 
                 else:
                     prompt_tokens = data.get("prompt_tokens", 0)
                     completion_tokens = data.get("completion_tokens", 0)
+
+                if "call_record" in data:
+                    for call_record in data["call_record"]:
+                        try:
+                            ##mengyao_debug 第三种方法，直接用sglang返回的结果
+                            prefix_len += call_record["usage"]["prompt_tokens_details"]["cached_tokens"]
+                        except Exception as e:
+                            ##mengyao_debug 第二种方法，算
+                            if call_record["prefix"] not in text_2_len:
+                                text_2_len[call_record["prefix"]] = len(tokenizer.tokenize(call_record["prefix"]))
+                            prefix_len += text_2_len[call_record["prefix"]]
 
                 if prompt_tokens > 0:
                     all_prompt_tokens.append(prompt_tokens)
@@ -723,31 +737,31 @@ if __name__ == "__main__":
         #     "locomo",
         # ),
 
-        (
-            "./token_consumption_build_memory_locomo/",
-            "./lightmem_locomo_results",
-            "locomo_lightmem_qwen3",
-        ),
+        # (
+        #     "./token_consumption_build_memory_locomo/",
+        #     "./lightmem_locomo_results",
+        #     "locomo_lightmem_qwen3",
+        # ),
         # (
         #     "./token_consumption_build_memory_locomo_event/",
         #     "./lightmem_locomo_results_event",
         #     "locomo_structmem_qwen3",
         # ),
-        (
-            "./token_consumption_build_memory_locomo_GLM-4.5-Air",
-            "./lightmem_locomo_results_GLM-4.5-Air",
-            "locomo_lightmem_GLM-4.5-Air",
-        ),
+        # (
+        #     "./token_consumption_build_memory_locomo_GLM-4.5-Air",
+        #     "./lightmem_locomo_results_GLM-4.5-Air",
+        #     "locomo_lightmem_GLM-4.5-Air",
+        # ),
         # (
         #     "./token_consumption_build_memory_locomo_event_GLM-4.5-Air",
         #     "./lightmem_locomo_results_event_GLM-4.5-Air",
         #     "locomo_Structmem_GLM-4.5-Air",
         # ),
-        (
-            "./token_consumption_build_memory_locomo_Kimi-K2.6",
-            "./lightmem_locomo_results_Kimi-K2.6",
-            "locomo_lightmem_Kimi-K2.6",
-        ),
+        # (
+        #     "./token_consumption_build_memory_locomo_Kimi-K2.6",
+        #     "./lightmem_locomo_results_Kimi-K2.6",
+        #     "locomo_lightmem_Kimi-K2.6",
+        # ),
         # (
         #     "./token_consumption_build_memory_locomo_event_Kimi-K2.6",
         #     "./lightmem_locomo_results_event_Kimi-K2.6",
@@ -784,37 +798,37 @@ if __name__ == "__main__":
         #     "lme_structmem_kimi-K2.6",
         # ),
 
-    #     (
-    #         "./token_consumption_build_memory_halumem",
-    #         "./lightmem_halumem_results",
-    #         "halumem_lightmem_qwen3-8B",
-    #     ),
-    #     (
-    #         "./token_consumption_build_memory_halumem_event",
-    #         "./lightmem_halumem_results_event",
-    #         "halumem_structmem_qwen3-8B",
-    #     ),
-    #     (
-    #         "./token_consumption_build_memory_halumem",
-    #         "./lightmem_halumem_results_GLM-4.5-Air/",
-    #         "halumem_lightmem_GLM",
-    #     ),
-    #     (
-    #         "./token_consumption_build_memory_halumem_event_GLM-4.5-Air",
-    #         "./lightmem_halumem_results_event_GLM-4.5-Air",
-    #         "halumem_structmem_GLM",
-    #     ),
-    #     #
-    #     (
-    #         "./token_consumption_build_memory_halumem_Kimi-K2.6",
-    #         "./lightmem_halumem_results_Kimi-K2.6",
-    #         "halumem_lightmem_Kimi",
-    #     ),
-    #     (
-    #         "./token_consumption_build_memory_halumem_event_Kimi-K2.6",
-    #         "./lightmem_halumem_results_event_Kimi-K2.6",
-    #         "halumem_structmem_Kimi",
-    #     ),
+        (
+            "./token_consumption_build_memory_halumem",
+            "./lightmem_halumem_results",
+            "halumem_lightmem_qwen3-8B",
+        ),
+        (
+            "./token_consumption_build_memory_halumem_event",
+            "./lightmem_halumem_results_event",
+            "halumem_structmem_qwen3-8B",
+        ),
+        (
+            "./token_consumption_build_memory_halumem",
+            "./lightmem_halumem_results_GLM-4.5-Air/",
+            "halumem_lightmem_GLM",
+        ),
+        (
+            "./token_consumption_build_memory_halumem_event_GLM-4.5-Air",
+            "./lightmem_halumem_results_event_GLM-4.5-Air",
+            "halumem_structmem_GLM",
+        ),
+        #
+        (
+            "./token_consumption_build_memory_halumem_Kimi-K2.6",
+            "./lightmem_halumem_results_Kimi-K2.6",
+            "halumem_lightmem_Kimi",
+        ),
+        (
+            "./token_consumption_build_memory_halumem_event_Kimi-K2.6",
+            "./lightmem_halumem_results_event_Kimi-K2.6",
+            "halumem_structmem_Kimi",
+        ),
     ]
 
     for token_path, result_path, name in tasks:

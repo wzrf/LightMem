@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import time
 from datetime import datetime
 from typing import List, Dict, Literal, Optional, Any, Tuple, Union, Callable
 import tiktoken
@@ -420,6 +421,8 @@ def process_extraction_results(
             )
         if "fusionrag_stats" in item:
             token_stats["fusionrag_stats"].extend(item["fusionrag_stats"])
+        if "call_record" in item:
+            token_stats["call_record"].extend(item["call_record"])
         logger.debug(f"[{call_id}] API Call {idx} raw output: {item.get('output_prompt', 'N/A')}")
         logger.debug(f"[{call_id}] API Call {idx} cleaned result: {item.get('cleaned_result', [])}")
         
@@ -558,7 +561,7 @@ def call_summary_llm(
     token_stats: Dict[str, int] = None,
     logger = None
 ) -> str:
-    from lightmem.memory.prompts import LoCoMo_Cross_Event_Consolidation
+    from lightmem.memory.prompts import LoCoMo_Cross_Event_Consolidation, LoCoMo_Cross_Event_Consolidation_postfix, LoCoMo_Cross_Event_Consolidation_prefix, LoCoMo_Cross_Event_Consolidation_prefix_
     logger.debug("Calling LLM for summary generation")
     speakers_str = ", ".join(sorted(speakers))
     prompt_template = custom_prompt if custom_prompt else LoCoMo_Cross_Event_Consolidation
@@ -586,9 +589,8 @@ def call_summary_llm(
         }
     ]
 
+    time_start = time.time()
     if os.getenv("FUSIONRAG", "").lower() == "true":
-        from lightmem.memory.prompts import LoCoMo_Cross_Event_Consolidation_prefix, \
-            LoCoMo_Cross_Event_Consolidation_postfix
         speakers_str = ", ".join(sorted(speakers))
         prompt_template = LoCoMo_Cross_Event_Consolidation_prefix
 
@@ -610,12 +612,23 @@ def call_summary_llm(
         fusionrag_stats = {}
         response, usage_info = manager.generate_response(messages)
 
+    time_end = time.time()
+
+    call_record = {
+        "metadata_messages": messages,
+        "prefix": "You are a professional conversation summarization assistant with temporal awareness."+LoCoMo_Cross_Event_Consolidation_prefix_,
+        "response": response,
+        "usage": usage_info,
+        "time": time_end - time_start,
+    }
+
     if token_stats is not None:
         token_stats["summarize_calls"] += 1
         token_stats["summarize_prompt_tokens"] += usage_info.get("prompt_tokens", 0)
         token_stats["summarize_completion_tokens"] += usage_info.get("completion_tokens", 0)
         token_stats["summarize_total_tokens"] += usage_info.get("total_tokens", 0)
         token_stats["fusionrag_stats"].append(fusionrag_stats)
+        token_stats["call_record"].append(call_record)
     
     if logger:
         logger.debug(

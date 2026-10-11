@@ -344,6 +344,15 @@ Conversation Records:
 Related Temporal Context (from other time periods):
 """
 
+LoCoMo_Cross_Event_Consolidation_prefix_ = """
+You are a professional conversation summarization assistant. 
+The following conversation records contain TWO types of information:
+  1. **Factual information**: concrete events, plans, opinions, preferences
+  2. **Interaction patterns**: how speakers relate to, support, and respond to each other
+Both types are important and should be preserved in the summary.
+Conversation Time:
+"""
+
 LoCoMo_Cross_Event_Consolidation_postfix = """
 Please generate a summary with the following requirements:
 CRITICAL - What to PRESERVE:

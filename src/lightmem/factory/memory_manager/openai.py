@@ -1,4 +1,5 @@
 import concurrent
+import time
 from collections import defaultdict
 from openai import OpenAI
 from typing import List, Dict, Optional, Literal, Any
@@ -233,11 +234,12 @@ class OpenaiManager:
         }
 
         response = self.client.chat.completions.create(**params)
-        usage_info = {
-            "prompt_tokens": response.usage.prompt_tokens,
-            "completion_tokens": response.usage.completion_tokens,
-            "total_tokens": response.usage.total_tokens,
-        }
+        # usage_info = {
+        #     "prompt_tokens": response.usage.prompt_tokens,
+        #     "completion_tokens": response.usage.completion_tokens,
+        #     "total_tokens": response.usage.total_tokens,
+        # }
+        usage_info = response.usage.model_dump()
         parsed_response = self._parse_response(response, tools)
 
         return parsed_response, usage_info
@@ -332,6 +334,7 @@ class OpenaiManager:
                 "output_prompt": "",
                 "cleaned_result": [],
                 "fusionrag_stats": [],
+                "call_record": [],
                 "usage": {
                     "prompt_tokens": 0,
                     "completion_tokens": 0,
@@ -345,8 +348,11 @@ class OpenaiManager:
                 merged["input_prompt"].extend(factual.get("input_prompt", []))
                 merged["cleaned_result"].extend(factual.get("cleaned_result", []))
                 fusionrag_stats = factual.get("fusionrag_stats", None)
+                call_record = factual.get("call_record", None)
                 if fusionrag_stats is not None:
                     merged["fusionrag_stats"].extend(fusionrag_stats)
+                if call_record is not None:
+                    merged["call_record"].extend(call_record)
                 if factual.get("usage"):
                     for key in merged["usage"]:
                         merged["usage"][key] += factual["usage"].get(key, 0)
@@ -355,8 +361,11 @@ class OpenaiManager:
                 merged["input_prompt"].extend(relational.get("input_prompt", []))
                 merged["cleaned_result"].extend(relational.get("cleaned_result", []))
                 fusionrag_stats = relational.get("fusionrag_stats", None)
+                call_record = relational.get("call_record", None)
                 if fusionrag_stats is not None:
                     merged["fusionrag_stats"].extend(fusionrag_stats)
+                if call_record is not None:
+                    merged["call_record"].extend(call_record)
                 if relational.get("usage"):
                     for key in merged["usage"]:
                         merged["usage"][key] += relational["usage"].get(key, 0)
@@ -451,6 +460,7 @@ class OpenaiManager:
                     {"role": "user", "content": user_prompt},
                 ]
 
+                time_start = time.time()
                 if os.getenv("FUSIONRAG", "").lower() == "true":
                     raw_response, usage_info, fusionrag_stats = self.generate_response_with_fusionrag(
                         system_prompt=system_prompt,
@@ -466,7 +476,15 @@ class OpenaiManager:
                         messages=metadata_messages,
                         response_format={"type": "json_object"},
                     )
+                time_end = time.time()
                 metadata_facts = clean_response(raw_response)
+                call_record = {
+                    "metadata_messages": metadata_messages,
+                    "prefix": system_prompt,
+                    "response": raw_response,
+                    "usage": usage_info,
+                    "time": time_end - time_start,
+                }
 
                 if entry_type == "factual":
                     usage_info["straight_use_tokens"] = len(user_prompt)
@@ -482,6 +500,7 @@ class OpenaiManager:
                     "cleaned_result": metadata_facts,
                     "usage": usage_info,
                     "fusionrag_stats": [fusionrag_stats],
+                    "call_record": [call_record],
                     "entry_type": entry_type
                 }
                 
@@ -493,6 +512,7 @@ class OpenaiManager:
                     "cleaned_result": [],
                     "usage": None,
                     "fusionrag_stats": None,
+                    "call_record": None,
                     "entry_type": entry_type
                 }
 
@@ -524,6 +544,7 @@ class OpenaiManager:
             {"role": "user", "content": user_prompt}
         ]
 
+        time_start = time.time()
         if os.getenv("FUSIONRAG", "").lower() == "true":
             response_text, usage_info, fusionrag_stats = self.generate_response_with_fusionrag(
                 system_prompt=system_prompt,
@@ -539,6 +560,14 @@ class OpenaiManager:
                 messages=messages,
                 response_format={"type": "json_object"}
             )
+        time_end = time.time()
+        call_record = {
+            "metadata_messages": messages,
+            "prefix": system_prompt,
+            "response": response_text,
+            "usage": usage_info,
+            "time": time_end - time_start,
+        }
 
         response_text = clean_json(response_text)
         
@@ -548,6 +577,7 @@ class OpenaiManager:
                 result = {"action": "ignore"}
             result["usage"] = usage_info
             result["fusionrag_stats"] = fusionrag_stats
+            result["call_record"] = call_record
             return result
         except Exception:
-            return {"action": "ignore", "usage": usage_info if 'usage_info' in locals() else None, "fusionrag_stats": fusionrag_stats}
+            return {"action": "ignore", "usage": usage_info if 'usage_info' in locals() else None, "fusionrag_stats": fusionrag_stats, "call_record": call_record}
